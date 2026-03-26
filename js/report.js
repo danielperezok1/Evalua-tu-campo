@@ -112,27 +112,44 @@ const Report = {
 
         // Satellite RGB comparison (wet vs dry year) - side by side
         if (mapImages.wetImage || mapImages.dryImage) {
-            html += '<div class="row g-2 mb-3">';
+            const wetLabel = mapImages.wettestYear ? `Ano lluvioso: ${mapImages.wettestYear} (${mapImages.wettestPrecip} mm)` : 'Ano lluvioso';
+            const dryLabel = mapImages.driestYear ? `Ano seco: ${mapImages.driestYear} (${mapImages.driestPrecip} mm)` : 'Ano seco';
+            html += `<p class="small text-muted mb-2"><i class="bi bi-info-circle me-1"></i>Imagenes satelitales comparativas. En el periodo critico (verano), las zonas con agua visible indican bajos anegables.</p>`;
+            html += '<div class="row g-2 mb-2">';
             if (mapImages.wetImage) {
                 html += `<div class="${mapImages.dryImage ? 'col-md-6' : 'col-12'}">`;
                 html += `<div class="border rounded overflow-hidden shadow-sm">`;
-                html += `<img src="${mapImages.wetImage}" class="w-100" alt="Ano lluvioso" style="object-fit:contain;">`;
-                html += `</div></div>`;
+                html += `<img src="${mapImages.wetImage}" class="w-100" alt="${wetLabel}" style="object-fit:contain;">`;
+                html += `</div>`;
+                html += `<small class="text-muted d-block text-center mt-1">${wetLabel}</small>`;
+                html += `</div>`;
             }
             if (mapImages.dryImage) {
                 html += `<div class="${mapImages.wetImage ? 'col-md-6' : 'col-12'}">`;
                 html += `<div class="border rounded overflow-hidden shadow-sm">`;
-                html += `<img src="${mapImages.dryImage}" class="w-100" alt="Ano seco" style="object-fit:contain;">`;
-                html += `</div></div>`;
+                html += `<img src="${mapImages.dryImage}" class="w-100" alt="${dryLabel}" style="object-fit:contain;">`;
+                html += `</div>`;
+                html += `<small class="text-muted d-block text-center mt-1">${dryLabel}</small>`;
+                html += `</div>`;
             }
             html += '</div>';
         }
 
-        // NDVI chart (real data)
+        // NDVI greenness map (spatial)
+        if (mapImages.ndviMap) {
+            html += '<div class="mb-3">';
+            html += `<div class="border rounded overflow-hidden shadow-sm">`;
+            html += `<img src="${mapImages.ndviMap}" class="w-100" alt="Mapa NDVI" style="object-fit:contain;">`;
+            html += `</div>`;
+            html += `<small class="text-muted d-block text-center mt-1">Zonas verdes = mayor vigor vegetal. Zonas marrones = menor cobertura o suelo expuesto.</small>`;
+            html += '</div>';
+        }
+
+        // NDVI/productivity chart (temporal)
         if (mapImages.ndviChart) {
             html += '<div class="mb-3">';
             html += `<div class="border rounded overflow-hidden shadow-sm">`;
-            html += `<img src="${mapImages.ndviChart}" class="w-100" alt="NDVI Historico" style="object-fit:contain;background:#fafafa;">`;
+            html += `<img src="${mapImages.ndviChart}" class="w-100" alt="Productividad Historica" style="object-fit:contain;background:#fafafa;">`;
             html += `</div>`;
             html += '</div>';
         }

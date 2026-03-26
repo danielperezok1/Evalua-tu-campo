@@ -200,9 +200,22 @@ const App = {
                     );
                     if (satCaptures.wetImage) mapImages.wetImage = satCaptures.wetImage;
                     if (satCaptures.dryImage) mapImages.dryImage = satCaptures.dryImage;
+                    // Pass actual years for report labels
+                    mapImages.wettestYear = pa.wettest.year;
+                    mapImages.wettestPrecip = pa.wettest.precip;
+                    mapImages.driestYear = pa.driest.year;
+                    mapImages.driestPrecip = pa.driest.precip;
                 } catch (e) {
                     console.warn('No se pudieron capturar imagenes satelitales:', e.message);
                 }
+            }
+
+            // Step 6b: NDVI greenness map from satellite imagery
+            this.updateLoading('Generando mapa de verdor (NDVI)...');
+            try {
+                mapImages.ndviMap = await MapRenderer.renderNDVIMap(this.fieldGeoJSON);
+            } catch (e) {
+                console.warn('No se pudo generar mapa NDVI:', e.message);
             }
 
             // Step 7: NDVI chart or productivity chart
@@ -211,7 +224,6 @@ const App = {
                     if (satelliteData.ndvi) {
                         mapImages.ndviChart = MapRenderer.renderNDVIChart(satelliteData.ndvi, climateData);
                     } else if (satelliteData.productivity) {
-                        // Fallback: render productivity chart when NDVI unavailable
                         mapImages.ndviChart = MapRenderer.renderProductivityChart(satelliteData.productivity, climateData);
                     }
                 } catch (e) {

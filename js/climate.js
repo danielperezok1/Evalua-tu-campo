@@ -93,10 +93,22 @@ const Climate = {
             precip: this.sum(m.precip) / ((endYear - startYear + 1) || 1)
         }));
 
-        const yearlyData = Object.entries(yearlyPrecip).map(([year, total]) => ({
-            year: parseInt(year),
-            precip: Math.round(total)
-        })).sort((a, b) => a.year - b.year);
+        // Count days per year to detect incomplete data
+        const yearDayCount = {};
+        for (let i = 0; i < n; i++) {
+            const year = new Date(daily.time[i]).getFullYear();
+            if (!yearDayCount[year]) yearDayCount[year] = 0;
+            if (daily.precipitation_sum[i] != null) yearDayCount[year]++;
+        }
+
+        const yearlyData = Object.entries(yearlyPrecip)
+            .map(([year, total]) => ({
+                year: parseInt(year),
+                precip: Math.round(total),
+                days: yearDayCount[parseInt(year)] || 0
+            }))
+            .filter(y => y.days >= 300 && y.precip >= 100) // Exclude incomplete years
+            .sort((a, b) => a.year - b.year);
 
         const annualPrecip = this.avg(yearlyData.map(y => y.precip));
 

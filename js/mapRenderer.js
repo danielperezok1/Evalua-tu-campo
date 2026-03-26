@@ -417,6 +417,221 @@ const MapRenderer = {
     },
 
     /**
+     * Generate NDVI-like greenness map from satellite RGB tiles.
+     * Computes vegetation index per pixel inside the field boundary.
+     */
+    async renderNDVIMap(fieldGeoJSON) {
+        const W = this.CANVAS_WIDTH, H = this.CANVAS_HEIGHT;
+        const bbox = turf.bbox(fieldGeoJSON);
+
+        // Expand bbox slightly
+        const expandLon = (bbox[2] - bbox[0]) * 0.15;
+        const expandLat = (bbox[3] - bbox[1]) * 0.15;
+        const viewBbox = [
+            bbox[0] - expandLon, bbox[1] - expandLat,
+            bbox[2] + expandLon, bbox[3] + expandLat
+        ];
+
+        const zoom = this.getZoomForBbox(viewBbox, W, H);
+        const minTile = this.lonLatToTile(viewBbox[0], viewBbox[3], zoom);
+        const maxTile = this.lonLatToTile(viewBbox[2], viewBbox[1], zoom);
+
+        // Load satellite tiles
+        const tilesX = maxTile.x - minTile.x + 1;
+        const tilesY = maxTile.y - minTile.y + 1;
+        const tileCanvas = document.createElement('canvas');
+        tileCanvas.width = tilesX * 256;
+        tileCanvas.height = tilesY * 256;
+        const tileCtx = tileCanvas.getContext('2d');
+        tileCtx.fillStyle = '#2a2a3a';
+        tileCtx.fillRect(0, 0, tileCanvas.width, tileCanvas.height);
+
+        const esriTile = (z, y, x) =>
+            `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
+
+        const promises = [];
+        let loadedCount = 0;
+        for (let tx = minTile.x; tx <= maxTile.x; tx++) {
+            for (let ty = minTile.y; ty <= maxTile.y; ty++) {
+                const url = esriTile(zoom, ty, tx);
+                const px = (tx - minTile.x) * 256;
+                const py = (ty - minTile.y) * 256;
+                promises.push(
+                    this.loadTileImg(url).then(img => {
+                        tileCtx.drawImage(img, px, py, 256, 256);
+                        loadedCount++;
+                    }).catch(() => {})
+                );
+            }
+        }
+        await Promise.all(promises);
+        if (loadedCount === 0) throw new Error('No tiles loaded for NDVI map');
+
+        // Create output canvas
+        const canvas = document.createElement('canvas');
+        canvas.width = W; canvas.height = H;
+        const ctx = canvas.getContext('2d');
+
+        // Map tiles to output
+        const srcTL = this.lonLatToPixelInGrid(viewBbox[0], viewBbox[3], zoom, minTile.x, minTile.y);
+        const srcBR = this.lonLatToPixelInGrid(viewBbox[2], viewBbox[1], zoom, minTile.x, minTile.y);
+        const srcW = srcBR[0] - srcTL[0];
+        const srcH = srcBR[1] - srcTL[1];
+
+        // Draw satellite base (dimmed)
+        ctx.drawImage(tileCanvas, srcTL[0], srcTL[1], srcW, srcH, 0, 0, W, H);
+
+        // Get pixel data to compute vegetation index
+        const imgData = ctx.getImageData(0, 0, W, H);
+        const pixels = imgData.data;
+
+        // Build field mask using canvas path
+        const maskCanvas = document.createElement('canvas');
+        maskCanvas.width = W; maskCanvas.height = H;
+        const maskCtx = maskCanvas.getContext('2d');
+
+        const proj = {
+            project: (lon, lat) => {
+                const px = this.lonLatToPixelInGrid(lon, lat, zoom, minTile.x, minTile.y);
+                return [(px[0] - srcTL[0]) / srcW * W, (px[1] - srcTL[1]) / srcH * H];
+            }
+        };
+
+        // Draw field polygon on mask
+        const fieldGeom = fieldGeoJSON.features[0].geometry;
+        const rings = fieldGeom.type === 'Polygon' ?
+            [fieldGeom.coordinates[0]] :
+            fieldGeom.coordinates.map(p => p[0]);
+
+        maskCtx.fillStyle = '#fff';
+        for (const ring of rings) {
+            maskCtx.beginPath();
+            for (let i = 0; i < ring.length; i++) {
+                const [x, y] = proj.project(ring[i][0], ring[i][1]);
+                if (i === 0) maskCtx.moveTo(x, y);
+                else maskCtx.lineTo(x, y);
+            }
+            maskCtx.closePath();
+            maskCtx.fill();
+        }
+        const maskData = maskCtx.getImageData(0, 0, W, H).data;
+
+        // Compute vegetation index for pixels inside field
+        // Using ExG (Excess Green): 2*G - R - B, normalized to 0-1
+        const viValues = [];
+        for (let i = 0; i < pixels.length; i += 4) {
+            const maskVal = maskData[i]; // R channel of mask
+            if (maskVal > 128) {
+                const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
+                const total = r + g + b;
+                if (total > 30) { // Skip very dark pixels
+                    const exg = (2 * g - r - b + 255) / 510; // Normalize to 0-1
+                    viValues.push({ idx: i, vi: exg });
+                }
+            }
+        }
+
+        // Compute percentiles for better color mapping
+        const sorted = viValues.map(v => v.vi).sort((a, b) => a - b);
+        const p5 = sorted[Math.floor(sorted.length * 0.05)] || 0;
+        const p95 = sorted[Math.floor(sorted.length * 0.95)] || 1;
+        const range = Math.max(p95 - p5, 0.01);
+
+        // Apply NDVI color palette to field pixels
+        // Outside field: dim satellite
+        const outCanvas = document.createElement('canvas');
+        outCanvas.width = W; outCanvas.height = H;
+        const outCtx = outCanvas.getContext('2d');
+
+        // Draw dimmed satellite base
+        outCtx.drawImage(canvas, 0, 0);
+        outCtx.fillStyle = 'rgba(0,0,0,0.5)';
+        outCtx.fillRect(0, 0, W, H);
+
+        const outData = outCtx.getImageData(0, 0, W, H);
+        const outPixels = outData.data;
+
+        // NDVI gradient: brown -> yellow -> light green -> dark green
+        const ndviPalette = [
+            [139, 90, 43],    // 0.0 - brown (bare soil)
+            [189, 146, 62],   // 0.15
+            [220, 200, 80],   // 0.3 - yellow
+            [170, 210, 80],   // 0.45
+            [100, 180, 60],   // 0.6 - green
+            [50, 140, 50],    // 0.75
+            [30, 100, 40],    // 0.9 - dark green
+            [20, 70, 30]      // 1.0
+        ];
+
+        for (const { idx, vi } of viValues) {
+            const norm = Math.max(0, Math.min(1, (vi - p5) / range));
+            const palIdx = norm * (ndviPalette.length - 1);
+            const lo = Math.floor(palIdx);
+            const hi = Math.min(lo + 1, ndviPalette.length - 1);
+            const t = palIdx - lo;
+
+            outPixels[idx] = ndviPalette[lo][0] + (ndviPalette[hi][0] - ndviPalette[lo][0]) * t;
+            outPixels[idx + 1] = ndviPalette[lo][1] + (ndviPalette[hi][1] - ndviPalette[lo][1]) * t;
+            outPixels[idx + 2] = ndviPalette[lo][2] + (ndviPalette[hi][2] - ndviPalette[lo][2]) * t;
+            outPixels[idx + 3] = 255;
+        }
+        outCtx.putImageData(outData, 0, 0);
+
+        // Field boundary
+        this.drawGeometry(outCtx, fieldGeom, proj, null, 'rgba(255,255,255,0.8)', 2.5);
+        this.drawGeometry(outCtx, fieldGeom, proj, null, '#1b4332', 1.5);
+
+        // Title bar
+        outCtx.fillStyle = 'rgba(0,0,0,0.65)';
+        outCtx.fillRect(0, 0, W, 32);
+        outCtx.fillStyle = '#ffffff';
+        outCtx.font = 'bold 14px Arial, sans-serif';
+        outCtx.textAlign = 'center';
+        outCtx.textBaseline = 'middle';
+        outCtx.fillText('Indice de Verdor (NDVI estimado desde imagen satelital)', W / 2, 16);
+
+        // North arrow
+        this.drawNorthArrowWhite(outCtx, W - 25, 52);
+
+        // Legend
+        const legW = 25, legH = 150;
+        const legX = W - legW - 50, legY = H - legH - 40;
+
+        // Gradient bar
+        for (let y = 0; y < legH; y++) {
+            const norm = 1 - y / legH; // Top = high, bottom = low
+            const palIdx = norm * (ndviPalette.length - 1);
+            const lo = Math.floor(palIdx);
+            const hi = Math.min(lo + 1, ndviPalette.length - 1);
+            const t = palIdx - lo;
+            const r = ndviPalette[lo][0] + (ndviPalette[hi][0] - ndviPalette[lo][0]) * t;
+            const g = ndviPalette[lo][1] + (ndviPalette[hi][1] - ndviPalette[lo][1]) * t;
+            const b = ndviPalette[lo][2] + (ndviPalette[hi][2] - ndviPalette[lo][2]) * t;
+            outCtx.fillStyle = `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;
+            outCtx.fillRect(legX, legY + y, legW, 1);
+        }
+        outCtx.strokeStyle = '#fff'; outCtx.lineWidth = 1;
+        outCtx.strokeRect(legX, legY, legW, legH);
+
+        // Legend labels
+        outCtx.fillStyle = '#fff'; outCtx.font = '11px Arial'; outCtx.textAlign = 'left';
+        outCtx.fillText('Alto', legX + legW + 5, legY + 10);
+        outCtx.fillText('Medio', legX + legW + 5, legY + legH / 2 + 4);
+        outCtx.fillText('Bajo', legX + legW + 5, legY + legH - 2);
+
+        // Label
+        outCtx.fillStyle = '#fff'; outCtx.font = 'bold 11px Arial'; outCtx.textAlign = 'center';
+        outCtx.fillText('Verdor', legX + legW / 2, legY - 8);
+
+        // Attribution
+        outCtx.fillStyle = 'rgba(255,255,255,0.5)';
+        outCtx.font = '9px Arial'; outCtx.textAlign = 'right';
+        outCtx.fillText('Calculado desde Esri World Imagery (RGB)', W - 8, H - 6);
+
+        return outCanvas.toDataURL('image/jpeg', 0.92);
+    },
+
+    /**
      * Render productivity chart as fallback when NDVI data unavailable
      */
     renderProductivityChart(prodData, precipData) {
