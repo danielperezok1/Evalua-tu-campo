@@ -28,6 +28,31 @@ const Climate = {
         return this.processClimateData(data, startYear, endYear);
     },
 
+    /**
+     * Fetch daily precipitation data for extreme event analysis
+     */
+    async fetchDaily(lat, lon) {
+        const endYear = new Date().getFullYear() - 1;
+        const startYear = endYear - 9;
+
+        const url = `https://archive-api.open-meteo.com/v1/archive?` +
+            `latitude=${lat}&longitude=${lon}` +
+            `&start_date=${startYear}-01-01&end_date=${endYear}-12-31` +
+            `&daily=precipitation_sum` +
+            `&timezone=America/Argentina/Cordoba`;
+
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`Open-Meteo daily HTTP ${response.status}`);
+
+        const data = await response.json();
+        if (!data.daily || !data.daily.time) return null;
+
+        return {
+            dates: data.daily.time,
+            precip: data.daily.precipitation_sum
+        };
+    },
+
     processClimateData(data, startYear, endYear) {
         const daily = data.daily;
         if (!daily || !daily.time) return null;

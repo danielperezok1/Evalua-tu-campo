@@ -7,6 +7,7 @@ const App = {
     map: null,
     analysisResults: null,
     soilLayer: null,
+    currentBaseLayer: null,
 
     init() {
         this.setupMap();
@@ -17,10 +18,32 @@ const App = {
     setupMap() {
         this.map = L.map('map').setView([-32.5, -63.5], 7);
 
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        // Base layers
+        const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '&copy; OpenStreetMap contributors',
             maxZoom: 18
-        }).addTo(this.map);
+        });
+
+        const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: '&copy; Esri, Maxar, Earthstar Geographics',
+            maxZoom: 18
+        });
+
+        const topoLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenTopoMap',
+            maxZoom: 17
+        });
+
+        osmLayer.addTo(this.map);
+        this.currentBaseLayer = osmLayer;
+
+        // Layer control
+        const baseLayers = {
+            'Calles': osmLayer,
+            'Satelite': satelliteLayer,
+            'Topografico': topoLayer
+        };
+        L.control.layers(baseLayers, null, { position: 'topright' }).addTo(this.map);
 
         this.fieldLayer = L.featureGroup().addTo(this.map);
     },
@@ -120,7 +143,6 @@ const App = {
             // Step 1: Load soil data
             this.updateLoading('Buscando hojas de suelo...');
             const bbox = turf.bbox(this.fieldGeoJSON);
-            // bbox is [minLon, minLat, maxLon, maxLat] - pass as array
             const soilData = await SoilData.loadForBoundingBox(bbox);
 
             // Step 2: Spatial analysis
@@ -128,17 +150,45 @@ const App = {
             this.analysisResults = Analysis.analyze(this.fieldGeoJSON, soilData);
 
             // Step 3: Climate data
-            this.updateLoading('Consultando datos climáticos...');
+            this.updateLoading('Consultando datos climaticos...');
             const centroid = turf.centroid(this.fieldGeoJSON);
             const [lon, lat] = centroid.geometry.coordinates;
             let climateData = null;
             try {
                 climateData = await Climate.fetchHistorical(lat, lon);
+                // Also fetch daily data for flood analysis
+                try {
+                    climateData.dailyData = await Climate.fetchDaily(lat, lon);
+                } catch (e) {
+                    console.warn('No se pudo obtener datos diarios:', e.message);
+                }
             } catch (e) {
                 console.warn('No se pudo obtener clima:', e.message);
             }
 
-            // Step 4: Generate report
+            // Step 4: Generate thematic maps
+            this.updateLoading('Generando mapas tematicos...');
+            let mapImages = null;
+            try {
+                mapImages = MapRenderer.generateAll(this.fieldGeoJSON, this.analysisResults.soilUnits);
+            } catch (e) {
+                console.warn('No se pudieron generar mapas:', e.message);
+            }
+
+            // Step 5: Satellite / historical analysis
+            this.updateLoading('Analizando datos satelitales e historicos...');
+            let satelliteData = null;
+            try {
+                satelliteData = await Satellite.analyze(
+                    lat, lon,
+                    climateData,
+                    this.analysisResults.weightedIP
+                );
+            } catch (e) {
+                console.warn('No se pudo completar analisis satelital:', e.message);
+            }
+
+            // Step 6: Generate report
             this.updateLoading('Generando informe...');
             const options = {
                 reportType: document.querySelector('input[name="reportType"]:checked').value,
@@ -146,7 +196,7 @@ const App = {
                 detailLevel: document.getElementById('detailLevel').value
             };
 
-            const reportHTML = Report.generate(this.analysisResults, options, climateData);
+            const reportHTML = Report.generate(this.analysisResults, options, climateData, mapImages, satelliteData);
 
             // Show results
             document.getElementById('reportContent').innerHTML = reportHTML;
@@ -190,7 +240,7 @@ const App = {
             features: results.soilUnits.filter(u => u.geometry).map(u => ({
                 type: 'Feature',
                 geometry: u.geometry.geometry || u.geometry,
-                properties: { ip: u.ip, unit: u.textUserId }
+                properties: { ip: u.ip, unit: u.textUserId, cu: u.cu }
             }))
         }, {
             style: (feature) => ({
@@ -202,15 +252,27 @@ const App = {
             }),
             onEachFeature: (feature, layer) => {
                 const p = feature.properties;
-                layer.bindPopup(`<b>${p.unit}</b><br>IP: ${p.ip || 'S/D'}`);
+                const cuRoman = Analysis.cuToRoman(p.cu);
+                layer.bindPopup(
+                    `<b>${p.unit}</b><br>IP: ${p.ip || 'S/D'}<br>Clase: ${cuRoman}`
+                );
             }
         }).addTo(this.map);
     },
 
     exportPDF() {
         const element = document.getElementById('reportContent');
+        const btn = document.getElementById('exportPdf');
+        const origText = btn.innerHTML;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Generando...';
+        btn.disabled = true;
 
-        html2canvas(element, { scale: 2, useCORS: true }).then(canvas => {
+        html2canvas(element, {
+            scale: 2,
+            useCORS: true,
+            logging: false,
+            allowTaint: true
+        }).then(canvas => {
             const { jsPDF } = window.jspdf;
             const pdf = new jsPDF('p', 'mm', 'a4');
 
@@ -233,6 +295,13 @@ const App = {
 
             const name = document.getElementById('fieldName').value || 'campo';
             pdf.save(`informe-suelo-${name}-${new Date().toISOString().slice(0, 10)}.pdf`);
+
+            btn.innerHTML = origText;
+            btn.disabled = false;
+        }).catch(err => {
+            console.error('Error generating PDF:', err);
+            btn.innerHTML = origText;
+            btn.disabled = false;
         });
     }
 };

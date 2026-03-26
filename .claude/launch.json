@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "server",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["http-server", "-p", "8000", "-c-1"],
+      "runtimeExecutable": "C:\\Users\\daperez\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+      "runtimeArgs": ["-m", "http.server", "8000"],
       "port": 8000
     }
   ]

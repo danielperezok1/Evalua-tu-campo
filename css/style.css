@@ -88,6 +88,28 @@
     background: #fffdf0;
 }
 
+/* Thematic map images */
+#reportContent img {
+    display: block;
+    margin: 0 auto;
+}
+
+/* Satellite section badges */
+.badge.fs-5 {
+    font-size: 1.1rem !important;
+}
+
+/* Progress bar in flood risk */
+.progress {
+    background-color: #e9ecef;
+    border-radius: 4px;
+}
+
+/* Map layer control styling */
+.leaflet-control-layers {
+    border-radius: 8px !important;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     #map {
