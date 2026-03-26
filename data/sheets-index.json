@@ -1,37 +1,31 @@
 [
-    {
-        "name": "JOVITA",
-        "code": "3563-8-9-10",
-        "bbox": [-62.32, -32.82, -61.98, -32.48],
-        "layerFile": "Jovita-3563-8-9-10-EPSG4326.js",
-        "filename": "Jovita"
-    },
-    {
-        "name": "LABOULAYE",
-        "code": "3461-3462",
-        "bbox": [-63.92, -34.32, -63.28, -33.68],
-        "layerFile": "Laboulaye-3461-3462-EPSG4326.js",
-        "filename": "Laboulaye"
-    },
-    {
-        "name": "RIOCUARTO",
-        "code": "3360-3361",
-        "bbox": [-64.32, -33.72, -63.68, -33.08],
-        "layerFile": "RioCuarto-3360-3361-EPSG4326.js",
-        "filename": "RioCuarto"
-    },
-    {
-        "name": "ONCATIVO",
-        "code": "3362-3362",
-        "bbox": [-64.02, -33.42, -63.38, -32.78],
-        "layerFile": "Oncativo-3362-3362-EPSG4326.js",
-        "filename": "Oncativo"
-    },
-    {
-        "name": "BALNEARIA",
-        "code": "3462-3462",
-        "bbox": [-63.58, -33.58, -62.94, -32.94],
-        "layerFile": "Balnearia-3462-3462-EPSG4326.js",
-        "filename": "Balnearia"
-    }
+  {"name":"ALEJANDRO","layerFile":"layers/Alejandro-3363-26-EPSG4326.js","bbox":[-63.879,-33.649,-63.506,-33.376],"filename":"ALEJANDRO"},
+  {"name":"ARIAS","layerFile":"layers/Arias-3363-29-EPSG4326.js","bbox":[-62.380,-33.469,-62.213,-33.346],"filename":"ARIAS"},
+  {"name":"BELLVILLE","layerFile":"layers/BellVille-3363-10-EPSG4326.js","bbox":[-62.989,-32.423,-62.774,-32.333],"filename":"BELLVILLE"},
+  {"name":"CABRERA","layerFile":"layers/Cabrera-3363-14-EPSG4326.js","bbox":[-64.000,-32.924,-63.500,-32.732],"filename":"CABRERA"},
+  {"name":"CANALS","layerFile":"layers/Canals-3363-28-EPSG4326.js","bbox":[-62.734,-33.667,-62.581,-33.436],"filename":"CANALS"},
+  {"name":"CORRALDEBUSTOS","layerFile":"layers/CorralDeBustos-3363-23-EPSG4326.js","bbox":[-62.302,-33.333,-62.081,-33.258],"filename":"CORRALDEBUSTOS"},
+  {"name":"ETRURIA","layerFile":"layers/Etruria-3363-15-EPSG4326.js","bbox":[-63.500,-33.000,-63.041,-32.786],"filename":"ETRURIA"},
+  {"name":"HERNANDO","layerFile":"layers/Hernando-3363-8-EPSG4326.js","bbox":[-64.000,-32.656,-63.513,-32.333],"filename":"HERNANDO"},
+  {"name":"JAMESCRAIK","layerFile":"layers/JamesCraik-3363-3-EPSG4326.js","bbox":[-63.247,-32.129,-63.000,-32.000],"filename":"JAMESCRAIK"},
+  {"name":"JOVITA","layerFile":"layers/Jovita-3563-8-9-10-EPSG4326.js","bbox":[-64.000,-34.667,-63.372,-34.333],"filename":"JOVITA"},
+  {"name":"LABORDE","layerFile":"layers/Laborde-3363-22-EPSG4326.js","bbox":[-62.581,-33.156,-62.500,-33.049],"filename":"LABORDE"},
+  {"name":"LABOULAYE","layerFile":"layers/Laboulaye-3563-3-EPSG4326.js","bbox":[-63.487,-34.333,-63.004,-34.000],"filename":"LABOULAYE"},
+  {"name":"LACARLOTA","layerFile":"layers/LaCarlota-3363-27-EPSG4326.js","bbox":[-63.445,-33.553,-63.031,-33.333],"filename":"LACARLOTA"},
+  {"name":"LANDETA","layerFile":"layers/Landeta-3363-5-EPSG4326.js","bbox":[-62.245,-32.333,-62.024,-32.172],"filename":"LANDETA"},
+  {"name":"LASVARILLAS","layerFile":"layers/LasVarillas-3163-34-EPSG4326.js","bbox":[-63.000,-31.975,-62.674,-31.701],"filename":"LASVARILLAS"},
+  {"name":"LEVALLE","layerFile":"layers/Levalle-3563-2-EPSG4326.js","bbox":[-64.000,-34.333,-63.510,-34.001],"filename":"LEVALLE"},
+  {"name":"MARCOSJUAREZ","layerFile":"layers/MarcosJuarez-3363-17-EPSG4326.js","bbox":[-62.417,-32.846,-62.062,-32.667],"filename":"MARCOSJUAREZ"},
+  {"name":"OLIVA","layerFile":"layers/Oliva-3363-2-EPSG4326.js","bbox":[-64.000,-32.333,-63.507,-32.000],"filename":"OLIVA"},
+  {"name":"ONCATIVO","layerFile":"layers/Oncativo-3163-32-EPSG4326.js","bbox":[-63.957,-32.000,-63.500,-31.667],"filename":"ONCATIVO"},
+  {"name":"PASCANAS","layerFile":"layers/Pascanas-3363-21-EPSG4326.js","bbox":[-63.419,-33.333,-63.038,-33.000],"filename":"PASCANAS"},
+  {"name":"POSSE","layerFile":"layers/JustinianoPosse-3363-16-EPSG4326.js","bbox":[-63.000,-32.787,-62.798,-32.667],"filename":"POSSE"},
+  {"name":"POZODELMOLLE","layerFile":"layers/PozoDelMolle-3363-4-EPSG4326.js","bbox":[-62.936,-32.333,-62.604,-32.126],"filename":"POZODELMOLLE"},
+  {"name":"RIOCUARTO","layerFile":"layers/RioCuarto-3363-19-EPSG4326.js","bbox":[-64.443,-33.331,-64.000,-33.000],"filename":"RIOCUARTO"},
+  {"name":"RIOTERCERO","layerFile":"layers/RioTercero-3363-1-EPSG4326.js","bbox":[-64.500,-32.333,-64.390,-32.230],"filename":"RIOTERCERO"},
+  {"name":"RUFINO","layerFile":"layers/Rufino-3563-4-EPSG4326.js","bbox":[-62.924,-34.240,-62.699,-34.000],"filename":"RUFINO"},
+  {"name":"UCACHA","layerFile":"layers/Ucacha-3363-20-EPSG4326.js","bbox":[-64.000,-33.286,-63.500,-33.044],"filename":"UCACHA"},
+  {"name":"VIAMONTE","layerFile":"layers/Viamonte-3363-EPSG4326.js","bbox":[-63.500,-33.931,-63.011,-33.667],"filename":"VIAMONTE"},
+  {"name":"VILLADELROSARIO","layerFile":"layers/VillaDelRosario-3163-26-EPSG4326.js","bbox":[-64.000,-31.666,-63.538,-31.333],"filename":"VILLADELROSARIO"},
+  {"name":"VILLAMARIA","layerFile":"layers/VillaMaria-3363-9-EPSG4326.js","bbox":[-63.500,-32.667,-63.000,-32.333],"filename":"VILLAMARIA"}
 ]
