@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Evalúa tu Campo - Informe de Suelos</title>
+
+    <!-- Bootstrap 5 -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+    <!-- Navbar -->
+    <nav class="navbar navbar-dark bg-dark-green">
+        <div class="container">
+            <span class="navbar-brand d-flex align-items-center">
+                <i class="bi bi-geo-alt-fill me-2"></i>
+                Evalúa tu Campo
+            </span>
+            <span class="navbar-text text-white-50 d-none d-md-inline">
+                Informe de suelos · Córdoba, Argentina
+            </span>
+        </div>
+    </nav>
+
+    <div class="container my-4">
+        <div class="row g-4">
+
+            <!-- Left column: upload + options -->
+            <div class="col-lg-5">
+                <!-- Upload Card -->
+                <div class="card shadow-sm mb-3">
+                    <div class="card-header bg-dark-green text-white">
+                        <i class="bi bi-upload me-1"></i> 1. Subí el límite del campo
+                    </div>
+                    <div class="card-body">
+                        <div id="dropZone" class="drop-zone text-center p-4">
+                            <i class="bi bi-cloud-arrow-up display-4 text-muted"></i>
+                            <p class="mt-2 mb-1">Arrastrá tu archivo acá o hacé clic para seleccionar</p>
+                            <small class="text-muted">ZIP (Shapefile), KML o KMZ</small>
+                            <input type="file" id="fileInput" accept=".zip,.kml,.kmz" class="d-none">
+                        </div>
+                        <div id="fileInfo" class="mt-2 d-none">
+                            <span class="badge bg-success" id="fileName"></span>
+                            <button class="btn btn-sm btn-outline-danger ms-2" id="clearFile">
+                                <i class="bi bi-x"></i> Quitar
+                            </button>
+                        </div>
+                        <div id="fileError" class="alert alert-danger mt-2 d-none"></div>
+                    </div>
+                </div>
+
+                <!-- Options Card -->
+                <div class="card shadow-sm mb-3">
+                    <div class="card-header bg-dark-green text-white">
+                        <i class="bi bi-sliders me-1"></i> 2. Opciones del informe
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Tipo de informe *</label>
+                            <div class="btn-group w-100" role="group">
+                                <input type="radio" class="btn-check" name="reportType" id="typeAlquiler" value="alquiler" checked>
+                                <label class="btn btn-outline-success" for="typeAlquiler">
+                                    <i class="bi bi-key"></i> Alquiler
+                                </label>
+                                <input type="radio" class="btn-check" name="reportType" id="typeCompra" value="compra">
+                                <label class="btn btn-outline-success" for="typeCompra">
+                                    <i class="bi bi-house-door"></i> Compra
+                                </label>
+                                <input type="radio" class="btn-check" name="reportType" id="typeManejo" value="manejo">
+                                <label class="btn btn-outline-success" for="typeManejo">
+                                    <i class="bi bi-gear"></i> Manejo
+                                </label>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="fieldName" class="form-label">Nombre del campo (opcional)</label>
+                            <input type="text" class="form-control" id="fieldName" placeholder="Ej: La Esperanza">
+                        </div>
+                        <div class="mb-3">
+                            <label for="detailLevel" class="form-label">Nivel de detalle</label>
+                            <select class="form-select" id="detailLevel">
+                                <option value="basico">Básico</option>
+                                <option value="intermedio" selected>Intermedio</option>
+                                <option value="detallado">Detallado</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Analyze button -->
+                <button id="analyzeBtn" class="btn btn-lg btn-success w-100 shadow-sm" disabled>
+                    <i class="bi bi-search me-1"></i> Analizar suelos
+                </button>
+            </div>
+
+            <!-- Right column: map + results -->
+            <div class="col-lg-7">
+                <!-- Map -->
+                <div class="card shadow-sm mb-3">
+                    <div class="card-header bg-dark-green text-white">
+                        <i class="bi bi-map me-1"></i> Mapa
+                    </div>
+                    <div id="map" style="height: 400px;"></div>
+                </div>
+
+                <!-- Loading -->
+                <div id="loading" class="text-center py-4 d-none">
+                    <div class="spinner-border text-success" role="status"></div>
+                    <p class="mt-2 text-muted" id="loadingText">Cargando datos de suelo...</p>
+                </div>
+
+                <!-- Results -->
+                <div id="results" class="d-none">
+                    <div class="card shadow-sm mb-3">
+                        <div class="card-header bg-dark-green text-white d-flex justify-content-between align-items-center">
+                            <span><i class="bi bi-file-earmark-text me-1"></i> Informe de Suelos</span>
+                            <button class="btn btn-sm btn-outline-light" id="exportPdf">
+                                <i class="bi bi-filetype-pdf"></i> Exportar PDF
+                            </button>
+                        </div>
+                        <div class="card-body" id="reportContent">
+                            <!-- Report gets injected here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="bg-light py-3 mt-4 border-top">
+        <div class="container text-center text-muted small">
+            Datos de suelo: <a href="https://suelos.cba.gov.ar" target="_blank">Cartas de Suelo IDECOR - Córdoba</a>.
+            Los resultados son orientativos y no reemplazan un estudio de suelos a campo.
+        </div>
+    </footer>
+
+    <!-- Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/@turf/turf@7/turf.min.js"></script>
+    <script src="https://unpkg.com/shpjs@latest/dist/shp.js"></script>
+    <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
+
+    <!-- App modules -->
+    <script src="js/fileParser.js"></script>
+    <script src="js/soilData.js"></script>
+    <script src="js/analysis.js"></script>
+    <script src="js/report.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

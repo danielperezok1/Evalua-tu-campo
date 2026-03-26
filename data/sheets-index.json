@@ -1,0 +1,37 @@
+[
+    {
+        "name": "JOVITA",
+        "code": "3563-8-9-10",
+        "bbox": [-62.32, -32.82, -61.98, -32.48],
+        "layerFile": "Jovita-3563-8-9-10-EPSG4326.js",
+        "filename": "Jovita"
+    },
+    {
+        "name": "LABOULAYE",
+        "code": "3461-3462",
+        "bbox": [-63.92, -34.32, -63.28, -33.68],
+        "layerFile": "Laboulaye-3461-3462-EPSG4326.js",
+        "filename": "Laboulaye"
+    },
+    {
+        "name": "RIOCUARTO",
+        "code": "3360-3361",
+        "bbox": [-64.32, -33.72, -63.68, -33.08],
+        "layerFile": "RioCuarto-3360-3361-EPSG4326.js",
+        "filename": "RioCuarto"
+    },
+    {
+        "name": "ONCATIVO",
+        "code": "3362-3362",
+        "bbox": [-64.02, -33.42, -63.38, -32.78],
+        "layerFile": "Oncativo-3362-3362-EPSG4326.js",
+        "filename": "Oncativo"
+    },
+    {
+        "name": "BALNEARIA",
+        "code": "3462-3462",
+        "bbox": [-63.58, -33.58, -62.94, -32.94],
+        "layerFile": "Balnearia-3462-3462-EPSG4326.js",
+        "filename": "Balnearia"
+    }
+]
