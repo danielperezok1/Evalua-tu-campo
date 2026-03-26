@@ -264,8 +264,19 @@ const App = {
         const element = document.getElementById('reportContent');
         const btn = document.getElementById('exportPdf');
         const origText = btn.innerHTML;
-        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Generando...';
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Generando PDF...';
         btn.disabled = true;
+
+        // Find natural break points: h5 headers, major sections, images
+        const breakPoints = [];
+        const elementTop = element.getBoundingClientRect().top;
+        const breakSelectors = 'h5, .pdf-section-start, .bg-light, .table-responsive, img';
+        element.querySelectorAll(breakSelectors).forEach(el => {
+            const rect = el.getBoundingClientRect();
+            const relativeTop = rect.top - elementTop;
+            breakPoints.push(relativeTop);
+        });
+        breakPoints.sort((a, b) => a - b);
 
         html2canvas(element, {
             scale: 2,
@@ -278,19 +289,76 @@ const App = {
 
             const imgWidth = 190;
             const pageHeight = 277;
-            const imgHeight = (canvas.height * imgWidth) / canvas.width;
+            const margin = 10;
+            const canvasToMm = imgWidth / canvas.width;
+            const totalImgHeightMm = canvas.height * canvasToMm;
 
-            let heightLeft = imgHeight;
-            let position = 10;
+            // Scale breakpoints from pixels to mm (accounting for html2canvas scale=2)
+            const elementHeight = element.scrollHeight;
+            const scaleFactor = canvas.height / elementHeight;
+            const breaksMm = breakPoints.map(bp => bp * scaleFactor * canvasToMm);
 
-            pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 10, position, imgWidth, imgHeight);
-            heightLeft -= pageHeight;
+            // Find the best cut point near the page boundary
+            const findBestBreak = (targetMm) => {
+                // Search zone: 20% before the cut line
+                const searchMin = targetMm - pageHeight * 0.2;
+                let bestBreak = targetMm; // default: hard cut
+                let bestDist = Infinity;
 
-            while (heightLeft > 0) {
-                position = heightLeft - imgHeight + 10;
-                pdf.addPage();
-                pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 10, position, imgWidth, imgHeight);
-                heightLeft -= pageHeight;
+                for (const bp of breaksMm) {
+                    if (bp >= searchMin && bp <= targetMm) {
+                        const dist = targetMm - bp;
+                        if (dist < bestDist) {
+                            bestDist = dist;
+                            bestBreak = bp;
+                        }
+                    }
+                }
+                return bestBreak;
+            };
+
+            // Generate pages with smart breaks
+            let currentPosMm = 0; // position in the total image (mm)
+            let pageNum = 0;
+            const imgDataUrl = canvas.toDataURL('image/jpeg', 0.95);
+
+            while (currentPosMm < totalImgHeightMm) {
+                if (pageNum > 0) pdf.addPage();
+
+                const remainingMm = totalImgHeightMm - currentPosMm;
+                let sliceHeightMm;
+
+                if (remainingMm <= pageHeight) {
+                    sliceHeightMm = remainingMm;
+                } else {
+                    const rawEnd = currentPosMm + pageHeight;
+                    const bestBreak = findBestBreak(rawEnd);
+                    sliceHeightMm = bestBreak - currentPosMm;
+                    // Safety: minimum 30% of page
+                    if (sliceHeightMm < pageHeight * 0.3) {
+                        sliceHeightMm = pageHeight;
+                    }
+                }
+
+                // Source coordinates in canvas pixels
+                const srcY = Math.round(currentPosMm / canvasToMm);
+                const srcH = Math.round(sliceHeightMm / canvasToMm);
+
+                // Create slice canvas
+                const sliceCanvas = document.createElement('canvas');
+                sliceCanvas.width = canvas.width;
+                sliceCanvas.height = Math.min(srcH, canvas.height - srcY);
+                const sliceCtx = sliceCanvas.getContext('2d');
+                sliceCtx.drawImage(canvas, 0, srcY, canvas.width, sliceCanvas.height, 0, 0, canvas.width, sliceCanvas.height);
+
+                const sliceImgH = sliceCanvas.height * canvasToMm;
+                pdf.addImage(sliceCanvas.toDataURL('image/jpeg', 0.95), 'JPEG', margin, margin, imgWidth, sliceImgH);
+
+                currentPosMm += sliceHeightMm;
+                pageNum++;
+
+                // Safety: max 20 pages
+                if (pageNum > 20) break;
             }
 
             const name = document.getElementById('fieldName').value || 'campo';

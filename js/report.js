@@ -112,12 +112,21 @@ const Report = {
 
     // === MAPS SECTION ===
     mapsSection(mapImages) {
-        let html = '<h5 class="mt-4"><i class="bi bi-map me-1"></i> Mapas Tematicos</h5>';
+        let html = '<h5 class="mt-4 pdf-section-start"><i class="bi bi-map me-1"></i> Mapas Tematicos</h5>';
+
+        // NDVI map first - full width, prominent
+        if (mapImages.ndviMap) {
+            html += '<div class="mb-3">';
+            html += `<div class="border rounded overflow-hidden shadow-sm">`;
+            html += `<img src="${mapImages.ndviMap}" class="w-100" alt="Mapa NDVI / Productividad" style="max-height:420px;object-fit:contain;background:#1a1a2e;">`;
+            html += `</div>`;
+            html += '</div>';
+        }
 
         html += '<div class="row g-3 mb-3">';
 
         if (mapImages.ipMap) {
-            html += '<div class="col-12">';
+            html += '<div class="col-12 pdf-section-start">';
             html += `<div class="border rounded overflow-hidden">`;
             html += `<img src="${mapImages.ipMap}" class="w-100" alt="Mapa de IP" style="max-height:400px;object-fit:contain;background:#f8f9fa;">`;
             html += `</div>`;

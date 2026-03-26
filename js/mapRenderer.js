@@ -21,7 +21,8 @@ const MapRenderer = {
         return {
             ipMap: this.renderMap(fieldGeoJSON, features, bbox, 'ip'),
             classMap: this.renderMap(fieldGeoJSON, features, bbox, 'class'),
-            seriesMap: this.renderMap(fieldGeoJSON, features, bbox, 'series')
+            seriesMap: this.renderMap(fieldGeoJSON, features, bbox, 'series'),
+            ndviMap: this.renderNDVIMap(fieldGeoJSON, features, bbox)
         };
     },
 
@@ -247,6 +248,239 @@ const MapRenderer = {
     drawNorthArrow(ctx, x, y) {
         ctx.save();
         ctx.fillStyle = '#1b4332';
+        ctx.font = 'bold 14px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('N', x, y - 12);
+
+        ctx.beginPath();
+        ctx.moveTo(x, y - 8);
+        ctx.lineTo(x - 5, y + 4);
+        ctx.lineTo(x, y + 1);
+        ctx.lineTo(x + 5, y + 4);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+    },
+
+    /**
+     * Render an interpolated NDVI/productivity map with smooth gradients
+     * Uses IP as proxy for NDVI estimation, with gaussian blur for smooth look
+     */
+    renderNDVIMap(fieldGeoJSON, features, bbox) {
+        const W = this.CANVAS_WIDTH;
+        const H = this.CANVAS_HEIGHT;
+        const canvas = document.createElement('canvas');
+        canvas.width = W;
+        canvas.height = H;
+        const ctx = canvas.getContext('2d');
+
+        // Dark background (satellite feel)
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fillRect(0, 0, W, H);
+
+        const proj = this.getProjection(bbox, W, H, this.PADDING);
+
+        // Step 1: Draw soil units with NDVI gradient colors on a temp canvas
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = W;
+        tempCanvas.height = H;
+        const tempCtx = tempCanvas.getContext('2d');
+
+        for (const unit of features) {
+            const geom = unit.geometry.geometry || unit.geometry;
+            const ip = unit.ip || 0;
+            // Convert IP (0-100) to estimated NDVI (0.1-0.75)
+            const ndvi = 0.1 + (ip / 100) * 0.65;
+            const color = this.ndviColor(ndvi);
+            this.drawGeometry(tempCtx, geom, proj, color, null, 0);
+        }
+
+        // Step 2: Create field boundary mask
+        const maskCanvas = document.createElement('canvas');
+        maskCanvas.width = W;
+        maskCanvas.height = H;
+        const maskCtx = maskCanvas.getContext('2d');
+        const fieldGeom = fieldGeoJSON.features[0].geometry;
+        this.drawGeometry(maskCtx, fieldGeom, proj, '#fff', null, 0);
+
+        // Step 3: Apply gaussian blur for smooth interpolated look
+        const blurCanvas = document.createElement('canvas');
+        blurCanvas.width = W;
+        blurCanvas.height = H;
+        const blurCtx = blurCanvas.getContext('2d');
+        blurCtx.filter = 'blur(8px)';
+        blurCtx.drawImage(tempCanvas, 0, 0);
+        blurCtx.filter = 'none';
+
+        // Step 4: Draw blurred colors, then sharp colors at lower opacity on top
+        // Clip to field boundary
+        ctx.save();
+        this.clipToField(ctx, fieldGeom, proj);
+
+        // Blurred base (smooth interpolation feel)
+        ctx.drawImage(blurCanvas, 0, 0);
+
+        // Sharp overlay at 50% for definition
+        ctx.globalAlpha = 0.5;
+        ctx.drawImage(tempCanvas, 0, 0);
+        ctx.globalAlpha = 1.0;
+
+        ctx.restore();
+
+        // Step 5: Draw thin unit boundaries (subtle)
+        for (const unit of features) {
+            const geom = unit.geometry.geometry || unit.geometry;
+            this.drawGeometry(ctx, geom, proj, null, 'rgba(255,255,255,0.25)', 0.5);
+        }
+
+        // Step 6: Draw field boundary (strong)
+        this.drawGeometry(ctx, fieldGeom, proj, null, '#ffffff', 2.5);
+
+        // Step 7: Add IP labels on each unit
+        ctx.font = 'bold 12px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        for (const unit of features) {
+            if (unit.percentage < 3) continue; // skip tiny units
+            const geom = unit.geometry.geometry || unit.geometry;
+            try {
+                const centroid = turf.centroid(unit.geometry.geometry ? unit.geometry : turf.feature(geom));
+                const [cx, cy] = proj.project(centroid.geometry.coordinates[0], centroid.geometry.coordinates[1]);
+                const ip = unit.ip || 0;
+                // Text shadow for readability
+                ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                ctx.fillText(ip, cx + 1, cy + 1);
+                ctx.fillStyle = '#ffffff';
+                ctx.fillText(ip, cx, cy);
+            } catch (e) { /* skip */ }
+        }
+
+        // Title
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 16px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillText('Mapa de NDVI / Productividad Estimada', W / 2, 8);
+        ctx.font = '11px Arial, sans-serif';
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        ctx.fillText('Basado en IP del suelo (proxy de vigor vegetal)', W / 2, 28);
+
+        // North arrow (white version)
+        this.drawNorthArrowWhite(ctx, W - 30, 55);
+
+        // Gradient legend bar
+        this.drawNDVILegend(ctx, W, H);
+
+        return canvas.toDataURL('image/png');
+    },
+
+    clipToField(ctx, fieldGeom, proj) {
+        const type = fieldGeom.type;
+        let coords;
+        if (type === 'Polygon') {
+            coords = [fieldGeom.coordinates[0]];
+        } else if (type === 'MultiPolygon') {
+            coords = fieldGeom.coordinates.map(p => p[0]);
+        } else return;
+
+        ctx.beginPath();
+        for (const ring of coords) {
+            const [x0, y0] = proj.project(ring[0][0], ring[0][1]);
+            ctx.moveTo(x0, y0);
+            for (let i = 1; i < ring.length; i++) {
+                const [x, y] = proj.project(ring[i][0], ring[i][1]);
+                ctx.lineTo(x, y);
+            }
+            ctx.closePath();
+        }
+        ctx.clip();
+    },
+
+    /**
+     * NDVI color scale: brown -> yellow -> green (satellite style)
+     */
+    ndviColor(ndvi) {
+        // Clamp
+        const v = Math.max(0, Math.min(1, ndvi));
+        // Color stops: 0.0=brown, 0.2=tan, 0.35=yellow, 0.5=lime, 0.65=green, 0.8=dark green
+        const stops = [
+            { at: 0.00, r: 139, g: 90, b: 43 },   // brown (bare soil)
+            { at: 0.15, r: 189, g: 146, b: 72 },   // tan
+            { at: 0.25, r: 215, g: 192, b: 88 },   // yellow-brown
+            { at: 0.35, r: 232, g: 220, b: 80 },   // yellow
+            { at: 0.45, r: 180, g: 210, b: 60 },   // yellow-green
+            { at: 0.55, r: 100, g: 180, b: 50 },   // light green
+            { at: 0.65, r: 40, g: 150, b: 40 },     // green
+            { at: 0.80, r: 15, g: 110, b: 30 },     // dark green
+            { at: 1.00, r: 0, g: 80, b: 20 }        // very dark green
+        ];
+
+        // Find segment
+        let lo = stops[0], hi = stops[stops.length - 1];
+        for (let i = 0; i < stops.length - 1; i++) {
+            if (v >= stops[i].at && v <= stops[i + 1].at) {
+                lo = stops[i];
+                hi = stops[i + 1];
+                break;
+            }
+        }
+
+        const t = (hi.at === lo.at) ? 0 : (v - lo.at) / (hi.at - lo.at);
+        const r = Math.round(lo.r + (hi.r - lo.r) * t);
+        const g = Math.round(lo.g + (hi.g - lo.g) * t);
+        const b = Math.round(lo.b + (hi.b - lo.b) * t);
+
+        return `rgb(${r},${g},${b})`;
+    },
+
+    drawNDVILegend(ctx, canvasWidth, canvasHeight) {
+        const barW = 20;
+        const barH = 180;
+        const x = canvasWidth - 55;
+        const y = canvasHeight - barH - 50;
+
+        // Background panel
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        const panelW = 50;
+        ctx.fillRect(x - 8, y - 25, panelW, barH + 55);
+
+        // Title
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 10px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('NDVI', x + barW / 2, y - 10);
+
+        // Gradient bar
+        for (let i = 0; i < barH; i++) {
+            const ndvi = 0.8 - (i / barH) * 0.7; // top=0.8, bottom=0.1
+            ctx.fillStyle = this.ndviColor(ndvi);
+            ctx.fillRect(x, y + i, barW, 1);
+        }
+
+        // Border
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x, y, barW, barH);
+
+        // Labels
+        ctx.fillStyle = '#fff';
+        ctx.font = '9px Arial, sans-serif';
+        ctx.textAlign = 'left';
+        const labels = [
+            { val: '0.8', yPos: 0 },
+            { val: '0.6', yPos: barH * 0.29 },
+            { val: '0.4', yPos: barH * 0.57 },
+            { val: '0.2', yPos: barH * 0.86 },
+            { val: '0.1', yPos: barH }
+        ];
+        for (const lb of labels) {
+            ctx.fillText(lb.val, x + barW + 3, y + lb.yPos + 3);
+        }
+    },
+
+    drawNorthArrowWhite(ctx, x, y) {
+        ctx.save();
+        ctx.fillStyle = '#ffffff';
         ctx.font = 'bold 14px Arial, sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText('N', x, y - 12);
