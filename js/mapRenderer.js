@@ -27,7 +27,8 @@ const MapRenderer = {
     async generateSatelliteCaptures(fieldGeoJSON, wettestYear, driestYear) {
         const results = {};
 
-        // Available S2 cloudless years from EOX (2018-2023) + Esri fallback
+        // Available S2 cloudless years from EOX (2018-2023)
+        // Sentinel-2 10m resolution at zoom 14
         const eoxYears = [2018, 2019, 2020, 2021, 2022, 2023];
 
         // Find closest EOX years, ensuring they are DIFFERENT
@@ -35,60 +36,66 @@ const MapRenderer = {
         let dryYear = this.findClosestYear(driestYear, eoxYears);
 
         if (wetYear === dryYear) {
-            // Pick distinct years: wet = closest to wettest, dry = next closest to driest
             const sortedByWet = [...eoxYears].sort((a, b) => Math.abs(a - wettestYear) - Math.abs(b - wettestYear));
             const sortedByDry = [...eoxYears].sort((a, b) => Math.abs(a - driestYear) - Math.abs(b - driestYear));
             wetYear = sortedByWet[0];
             dryYear = sortedByDry.find(y => y !== wetYear) || sortedByDry[1] || sortedByDry[0];
-            // If still same (edge case), pick extremes
             if (wetYear === dryYear) {
                 wetYear = eoxYears[eoxYears.length - 1];
                 dryYear = eoxYears[0];
             }
         }
 
-        // Esri satellite (current) as primary - always works with CORS
+        // Esri fallback (always works with CORS)
         const esriTile = (z, y, x) =>
             `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
 
-        // EOX Sentinel-2 cloudless by year
+        // EOX Sentinel-2 cloudless by year (10m native resolution)
         const eoxTile = (year) => (z, y, x) =>
             `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-${year}_3857/default/GoogleMapsCompatible/${z}/${y}/${x}.jpg`;
 
-        // Try wet year
+        const hiResOpts = { hiRes: true };
+
+        // Try wet year - Sentinel-2 10m
         try {
             results.wetImage = await this.renderSatelliteView(
                 fieldGeoJSON, eoxTile(wetYear),
-                `Imagen Satelital - Ano Lluvioso (${wettestYear}, composito ${wetYear})`
+                `Sentinel-2 (10m) - Ano Lluvioso ${wettestYear} (composito S2 ${wetYear})`,
+                hiResOpts
             );
             results.wetYear = wetYear;
+            results.source = 'Sentinel-2';
         } catch (e) {
-            console.warn('EOX wet year failed, using Esri:', e.message);
+            console.warn('EOX wet failed, trying Esri:', e.message);
             try {
                 results.wetImage = await this.renderSatelliteView(
                     fieldGeoJSON, esriTile,
-                    `Imagen Satelital - Referencia Actual`
+                    `Imagen Satelital - Ano Lluvioso ${wettestYear}`,
+                    hiResOpts
                 );
-                results.wetYear = 'actual';
-            } catch (e2) { console.warn('Satellite capture failed:', e2.message); }
+                results.wetYear = wettestYear;
+                results.source = 'Esri';
+            } catch (e2) { console.warn('Wet capture failed:', e2.message); }
         }
 
-        // Try dry year
+        // Try dry year - Sentinel-2 10m
         try {
             results.dryImage = await this.renderSatelliteView(
                 fieldGeoJSON, eoxTile(dryYear),
-                `Imagen Satelital - Ano Seco (${driestYear}, composito ${dryYear})`
+                `Sentinel-2 (10m) - Ano Seco ${driestYear} (composito S2 ${dryYear})`,
+                hiResOpts
             );
             results.dryYear = dryYear;
         } catch (e) {
-            console.warn('EOX dry year failed, using Esri:', e.message);
+            console.warn('EOX dry failed, trying Esri:', e.message);
             try {
                 results.dryImage = await this.renderSatelliteView(
                     fieldGeoJSON, esriTile,
-                    `Imagen Satelital - Ano Seco (referencia)`
+                    `Imagen Satelital - Ano Seco ${driestYear}`,
+                    hiResOpts
                 );
-                results.dryYear = 'ref';
-            } catch (e2) { console.warn('Dry satellite capture failed:', e2.message); }
+                results.dryYear = driestYear;
+            } catch (e2) { console.warn('Dry capture failed:', e2.message); }
         }
 
         return results;
@@ -102,20 +109,29 @@ const MapRenderer = {
 
     /**
      * Capture satellite imagery for a field from tile service
+     * @param {Object} fieldGeoJSON
+     * @param {Function} tileUrlFn - (z, y, x) => url
+     * @param {string} title
+     * @param {Object} opts - { hiRes: true } for 10m Sentinel-2 resolution
      */
-    async renderSatelliteView(fieldGeoJSON, tileUrlFn, title) {
-        const W = this.CANVAS_WIDTH, H = this.CANVAS_HEIGHT;
+    async renderSatelliteView(fieldGeoJSON, tileUrlFn, title, opts) {
+        const hiRes = opts && opts.hiRes;
+        const W = hiRes ? 900 : this.CANVAS_WIDTH;
+        const H = hiRes ? 620 : this.CANVAS_HEIGHT;
         const bbox = turf.bbox(fieldGeoJSON);
 
         // Expand bbox for context
-        const expandLon = (bbox[2] - bbox[0]) * 0.2;
-        const expandLat = (bbox[3] - bbox[1]) * 0.2;
+        const expandFactor = hiRes ? 0.1 : 0.2;
+        const expandLon = (bbox[2] - bbox[0]) * expandFactor;
+        const expandLat = (bbox[3] - bbox[1]) * expandFactor;
         const viewBbox = [
             bbox[0] - expandLon, bbox[1] - expandLat,
             bbox[2] + expandLon, bbox[3] + expandLat
         ];
 
-        const zoom = this.getZoomForBbox(viewBbox, W, H);
+        // For hi-res: allow more tiles (up to 36) to get zoom 14 (~10m/px)
+        const maxTiles = hiRes ? 36 : 20;
+        const zoom = this.getZoomForBbox(viewBbox, W, H, maxTiles);
         const minTile = this.lonLatToTile(viewBbox[0], viewBbox[3], zoom);
         const maxTile = this.lonLatToTile(viewBbox[2], viewBbox[1], zoom);
 
@@ -421,22 +437,23 @@ const MapRenderer = {
      * Computes vegetation index per pixel inside the field boundary.
      */
     async renderNDVIMap(fieldGeoJSON) {
-        const W = this.CANVAS_WIDTH, H = this.CANVAS_HEIGHT;
+        const W = 900, H = 620; // High res canvas for 10m detail
         const bbox = turf.bbox(fieldGeoJSON);
 
-        // Expand bbox slightly
-        const expandLon = (bbox[2] - bbox[0]) * 0.15;
-        const expandLat = (bbox[3] - bbox[1]) * 0.15;
+        // Tight bbox for maximum detail
+        const expandLon = (bbox[2] - bbox[0]) * 0.1;
+        const expandLat = (bbox[3] - bbox[1]) * 0.1;
         const viewBbox = [
             bbox[0] - expandLon, bbox[1] - expandLat,
             bbox[2] + expandLon, bbox[3] + expandLat
         ];
 
-        const zoom = this.getZoomForBbox(viewBbox, W, H);
+        // Use higher zoom (up to 36 tiles) for ~10m/px Sentinel-2 detail
+        const zoom = this.getZoomForBbox(viewBbox, W, H, 36);
         const minTile = this.lonLatToTile(viewBbox[0], viewBbox[3], zoom);
         const maxTile = this.lonLatToTile(viewBbox[2], viewBbox[1], zoom);
 
-        // Load satellite tiles
+        // Load satellite tiles - try EOX Sentinel-2 first, fallback to Esri
         const tilesX = maxTile.x - minTile.x + 1;
         const tilesY = maxTile.y - minTile.y + 1;
         const tileCanvas = document.createElement('canvas');
@@ -446,25 +463,45 @@ const MapRenderer = {
         tileCtx.fillStyle = '#2a2a3a';
         tileCtx.fillRect(0, 0, tileCanvas.width, tileCanvas.height);
 
+        // Try Sentinel-2 cloudless (2023 = most recent), fallback to Esri
+        const eoxTile = (z, y, x) =>
+            `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2023_3857/default/GoogleMapsCompatible/${z}/${y}/${x}.jpg`;
         const esriTile = (z, y, x) =>
             `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
 
-        const promises = [];
+        let tileSource = 'Sentinel-2 (10m)';
+
+        // Try EOX Sentinel-2 first
         let loadedCount = 0;
-        for (let tx = minTile.x; tx <= maxTile.x; tx++) {
-            for (let ty = minTile.y; ty <= maxTile.y; ty++) {
-                const url = esriTile(zoom, ty, tx);
-                const px = (tx - minTile.x) * 256;
-                const py = (ty - minTile.y) * 256;
-                promises.push(
-                    this.loadTileImg(url).then(img => {
-                        tileCtx.drawImage(img, px, py, 256, 256);
-                        loadedCount++;
-                    }).catch(() => {})
-                );
+        const loadTiles = async (tileFn) => {
+            const promises = [];
+            loadedCount = 0;
+            // Clear canvas for retry
+            tileCtx.fillStyle = '#2a2a3a';
+            tileCtx.fillRect(0, 0, tileCanvas.width, tileCanvas.height);
+            for (let tx = minTile.x; tx <= maxTile.x; tx++) {
+                for (let ty = minTile.y; ty <= maxTile.y; ty++) {
+                    const url = tileFn(zoom, ty, tx);
+                    const px = (tx - minTile.x) * 256;
+                    const py = (ty - minTile.y) * 256;
+                    promises.push(
+                        this.loadTileImg(url).then(img => {
+                            tileCtx.drawImage(img, px, py, 256, 256);
+                            loadedCount++;
+                        }).catch(() => {})
+                    );
+                }
             }
+            await Promise.all(promises);
+        };
+
+        // Try Sentinel-2 first
+        await loadTiles(eoxTile);
+        if (loadedCount === 0) {
+            // Fallback to Esri
+            tileSource = 'Esri World Imagery';
+            await loadTiles(esriTile);
         }
-        await Promise.all(promises);
         if (loadedCount === 0) throw new Error('No tiles loaded for NDVI map');
 
         // Create output canvas
@@ -588,7 +625,7 @@ const MapRenderer = {
         outCtx.font = 'bold 14px Arial, sans-serif';
         outCtx.textAlign = 'center';
         outCtx.textBaseline = 'middle';
-        outCtx.fillText('Indice de Verdor (NDVI estimado desde imagen satelital)', W / 2, 16);
+        outCtx.fillText(`Mapa de Verdor / NDVI estimado - ${tileSource} - Zoom ${zoom}`, W / 2, 16);
 
         // North arrow
         this.drawNorthArrowWhite(outCtx, W - 25, 52);
@@ -626,7 +663,7 @@ const MapRenderer = {
         // Attribution
         outCtx.fillStyle = 'rgba(255,255,255,0.5)';
         outCtx.font = '9px Arial'; outCtx.textAlign = 'right';
-        outCtx.fillText('Calculado desde Esri World Imagery (RGB)', W - 8, H - 6);
+        outCtx.fillText(`Verdor calculado desde ${tileSource} (RGB)`, W - 8, H - 6);
 
         return outCanvas.toDataURL('image/jpeg', 0.92);
     },
@@ -861,14 +898,15 @@ const MapRenderer = {
         return [x, y];
     },
 
-    getZoomForBbox(bbox, width, height) {
+    getZoomForBbox(bbox, width, height, maxTiles) {
+        const maxT = maxTiles || 20; // default 4x5=20
+        const maxPerAxis = Math.ceil(Math.sqrt(maxT));
         for (let z = 16; z >= 1; z--) {
             const tl = this.lonLatToTile(bbox[0], bbox[3], z);
             const br = this.lonLatToTile(bbox[2], bbox[1], z);
             const tilesX = br.x - tl.x + 1;
             const tilesY = br.y - tl.y + 1;
-            // Keep tile count reasonable (max ~4x3 tiles)
-            if (tilesX <= 5 && tilesY <= 4) return z;
+            if (tilesX * tilesY <= maxT && tilesX <= maxPerAxis + 2 && tilesY <= maxPerAxis + 2) return z;
         }
         return 10;
     },
