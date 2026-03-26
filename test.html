@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test - Evalúa tu Campo</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+    <div class="container my-5">
+        <h1><i class="bi bi-bug"></i> Test de Carga - Evalúa tu Campo</h1>
+        <hr>
+
+        <div class="alert alert-info">
+            <strong>Esta página verifica que todas las librerías y módulos se cargan correctamente.</strong>
+        </div>
+
+        <div id="tests" class="row g-3">
+            <div class="col-12">
+                <h5>Librerías CDN</h5>
+                <div id="testLibs"></div>
+            </div>
+            <div class="col-12">
+                <h5>Módulos de la app</h5>
+                <div id="testModules"></div>
+            </div>
+            <div class="col-12">
+                <h5>Datos</h5>
+                <div id="testData"></div>
+            </div>
+        </div>
+
+        <hr>
+        <p class="text-muted">
+            <small>Si todo está ✅ verde, la app está lista para usar.</small>
+        </p>
+    </div>
+
+    <!-- Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/@turf/turf@7/turf.min.js"></script>
+    <script src="https://unpkg.com/shpjs@latest/dist/shp.js"></script>
+    <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
+
+    <!-- App modules -->
+    <script src="js/fileParser.js"></script>
+    <script src="js/soilData.js"></script>
+    <script src="js/analysis.js"></script>
+    <script src="js/report.js"></script>
+    <script src="js/app.js"></script>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const tests = [
+                { name: 'Leaflet', check: () => typeof L !== 'undefined' },
+                { name: 'Turf.js', check: () => typeof turf !== 'undefined' },
+                { name: 'shpjs', check: () => typeof shp !== 'undefined' },
+                { name: 'JSZip', check: () => typeof JSZip !== 'undefined' },
+                { name: 'html2canvas', check: () => typeof html2canvas !== 'undefined' },
+                { name: 'jsPDF', check: () => typeof jsPDF !== 'undefined' }
+            ];
+
+            const modules = [
+                { name: 'FileParser', check: () => typeof FileParser === 'object' },
+                { name: 'SoilData', check: () => typeof SoilData === 'object' },
+                { name: 'Analysis', check: () => typeof Analysis === 'object' },
+                { name: 'Report', check: () => typeof Report === 'object' },
+                { name: 'App', check: () => typeof App === 'object' }
+            ];
+
+            const dataChecks = [
+                { name: 'sheets-index.json', check: async () => {
+                    const r = await fetch('data/sheets-index.json');
+                    return r.ok && r.json().then(d => Array.isArray(d));
+                }}
+            ];
+
+            // Render tests
+            const renderTest = (test, container) => {
+                const result = test.check();
+                const status = result ? '✅' : '❌';
+                const badge = result ? 'bg-success' : 'bg-danger';
+                const html = `<span class="badge ${badge} me-2">${status}</span> ${test.name}`;
+                const el = document.createElement('div');
+                el.innerHTML = html;
+                container.appendChild(el);
+            };
+
+            tests.forEach(t => renderTest(t, document.getElementById('testLibs')));
+            modules.forEach(t => renderTest(t, document.getElementById('testModules')));
+
+            // Data checks (async)
+            Promise.all(dataChecks.map(async t => {
+                try {
+                    const ok = await t.check();
+                    renderTest({ ...t, check: () => ok }, document.getElementById('testData'));
+                } catch (e) {
+                    const el = document.createElement('div');
+                    el.innerHTML = `<span class="badge bg-danger me-2">❌</span> ${t.name} (error)`;
+                    document.getElementById('testData').appendChild(el);
+                }
+            }));
+
+            console.log('✅ Test page loaded');
+        });
+    </script>
+</body>
+</html>
