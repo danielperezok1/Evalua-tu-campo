@@ -112,13 +112,31 @@ const Report = {
 
     // === MAPS SECTION ===
     mapsSection(mapImages) {
-        let html = '<h5 class="mt-4 pdf-section-start"><i class="bi bi-map me-1"></i> Mapas Tematicos</h5>';
+        let html = '<h5 class="mt-4"><i class="bi bi-map me-1"></i> Mapas Tematicos</h5>';
 
-        // NDVI map first - full width, prominent
-        if (mapImages.ndviMap) {
+        // Satellite RGB comparison (wet vs dry year) - side by side
+        if (mapImages.wetImage || mapImages.dryImage) {
+            html += '<div class="row g-2 mb-3">';
+            if (mapImages.wetImage) {
+                html += `<div class="${mapImages.dryImage ? 'col-md-6' : 'col-12'}">`;
+                html += `<div class="border rounded overflow-hidden shadow-sm">`;
+                html += `<img src="${mapImages.wetImage}" class="w-100" alt="Ano lluvioso" style="object-fit:contain;">`;
+                html += `</div></div>`;
+            }
+            if (mapImages.dryImage) {
+                html += `<div class="${mapImages.wetImage ? 'col-md-6' : 'col-12'}">`;
+                html += `<div class="border rounded overflow-hidden shadow-sm">`;
+                html += `<img src="${mapImages.dryImage}" class="w-100" alt="Ano seco" style="object-fit:contain;">`;
+                html += `</div></div>`;
+            }
+            html += '</div>';
+        }
+
+        // NDVI chart (real data)
+        if (mapImages.ndviChart) {
             html += '<div class="mb-3">';
             html += `<div class="border rounded overflow-hidden shadow-sm">`;
-            html += `<img src="${mapImages.ndviMap}" class="w-100" alt="Mapa NDVI / Productividad" style="max-height:420px;object-fit:contain;background:#1a1a2e;">`;
+            html += `<img src="${mapImages.ndviChart}" class="w-100" alt="NDVI Historico" style="object-fit:contain;background:#fafafa;">`;
             html += `</div>`;
             html += '</div>';
         }
@@ -126,7 +144,7 @@ const Report = {
         html += '<div class="row g-3 mb-3">';
 
         if (mapImages.ipMap) {
-            html += '<div class="col-12 pdf-section-start">';
+            html += '<div class="col-12">';
             html += `<div class="border rounded overflow-hidden">`;
             html += `<img src="${mapImages.ipMap}" class="w-100" alt="Mapa de IP" style="max-height:400px;object-fit:contain;background:#f8f9fa;">`;
             html += `</div>`;

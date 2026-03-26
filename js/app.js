@@ -173,7 +173,9 @@ const App = {
                 mapImages = MapRenderer.generateAll(this.fieldGeoJSON, this.analysisResults.soilUnits);
             } catch (e) {
                 console.warn('No se pudieron generar mapas:', e.message);
+                mapImages = {};
             }
+            if (!mapImages) mapImages = {};
 
             // Step 5: Satellite / historical analysis
             this.updateLoading('Analizando datos satelitales e historicos...');
@@ -188,7 +190,31 @@ const App = {
                 console.warn('No se pudo completar analisis satelital:', e.message);
             }
 
-            // Step 6: Generate report
+            // Step 6: Satellite imagery captures (wet/dry year comparison)
+            if (satelliteData && satelliteData.precipAnalysis) {
+                this.updateLoading('Capturando imagenes satelitales...');
+                try {
+                    const pa = satelliteData.precipAnalysis;
+                    const satCaptures = await MapRenderer.generateSatelliteCaptures(
+                        this.fieldGeoJSON, pa.wettest.year, pa.driest.year
+                    );
+                    if (satCaptures.wetImage) mapImages.wetImage = satCaptures.wetImage;
+                    if (satCaptures.dryImage) mapImages.dryImage = satCaptures.dryImage;
+                } catch (e) {
+                    console.warn('No se pudieron capturar imagenes satelitales:', e.message);
+                }
+            }
+
+            // Step 7: NDVI chart (if data available)
+            if (satelliteData && satelliteData.ndvi && climateData) {
+                try {
+                    mapImages.ndviChart = MapRenderer.renderNDVIChart(satelliteData.ndvi, climateData);
+                } catch (e) {
+                    console.warn('No se pudo generar grafico NDVI:', e.message);
+                }
+            }
+
+            // Step 8: Generate report
             this.updateLoading('Generando informe...');
             const options = {
                 reportType: document.querySelector('input[name="reportType"]:checked').value,
@@ -267,17 +293,6 @@ const App = {
         btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Generando PDF...';
         btn.disabled = true;
 
-        // Find natural break points: h5 headers, major sections, images
-        const breakPoints = [];
-        const elementTop = element.getBoundingClientRect().top;
-        const breakSelectors = 'h5, .pdf-section-start, .bg-light, .table-responsive, img';
-        element.querySelectorAll(breakSelectors).forEach(el => {
-            const rect = el.getBoundingClientRect();
-            const relativeTop = rect.top - elementTop;
-            breakPoints.push(relativeTop);
-        });
-        breakPoints.sort((a, b) => a - b);
-
         html2canvas(element, {
             scale: 2,
             useCORS: true,
@@ -290,75 +305,29 @@ const App = {
             const imgWidth = 190;
             const pageHeight = 277;
             const margin = 10;
-            const canvasToMm = imgWidth / canvas.width;
-            const totalImgHeightMm = canvas.height * canvasToMm;
 
-            // Scale breakpoints from pixels to mm (accounting for html2canvas scale=2)
-            const elementHeight = element.scrollHeight;
-            const scaleFactor = canvas.height / elementHeight;
-            const breaksMm = breakPoints.map(bp => bp * scaleFactor * canvasToMm);
+            // Find safe cut points by scanning canvas pixels for white/empty rows
+            const cutPoints = this.findSafeCutPoints(canvas, pageHeight, imgWidth);
 
-            // Find the best cut point near the page boundary
-            const findBestBreak = (targetMm) => {
-                // Search zone: 20% before the cut line
-                const searchMin = targetMm - pageHeight * 0.2;
-                let bestBreak = targetMm; // default: hard cut
-                let bestDist = Infinity;
-
-                for (const bp of breaksMm) {
-                    if (bp >= searchMin && bp <= targetMm) {
-                        const dist = targetMm - bp;
-                        if (dist < bestDist) {
-                            bestDist = dist;
-                            bestBreak = bp;
-                        }
-                    }
-                }
-                return bestBreak;
-            };
-
-            // Generate pages with smart breaks
-            let currentPosMm = 0; // position in the total image (mm)
             let pageNum = 0;
-            const imgDataUrl = canvas.toDataURL('image/jpeg', 0.95);
-
-            while (currentPosMm < totalImgHeightMm) {
+            for (let i = 0; i < cutPoints.length; i++) {
                 if (pageNum > 0) pdf.addPage();
 
-                const remainingMm = totalImgHeightMm - currentPosMm;
-                let sliceHeightMm;
-
-                if (remainingMm <= pageHeight) {
-                    sliceHeightMm = remainingMm;
-                } else {
-                    const rawEnd = currentPosMm + pageHeight;
-                    const bestBreak = findBestBreak(rawEnd);
-                    sliceHeightMm = bestBreak - currentPosMm;
-                    // Safety: minimum 30% of page
-                    if (sliceHeightMm < pageHeight * 0.3) {
-                        sliceHeightMm = pageHeight;
-                    }
-                }
-
-                // Source coordinates in canvas pixels
-                const srcY = Math.round(currentPosMm / canvasToMm);
-                const srcH = Math.round(sliceHeightMm / canvasToMm);
+                const srcY = cutPoints[i].srcY;
+                const srcH = cutPoints[i].srcH;
 
                 // Create slice canvas
                 const sliceCanvas = document.createElement('canvas');
                 sliceCanvas.width = canvas.width;
-                sliceCanvas.height = Math.min(srcH, canvas.height - srcY);
+                sliceCanvas.height = srcH;
                 const sliceCtx = sliceCanvas.getContext('2d');
-                sliceCtx.drawImage(canvas, 0, srcY, canvas.width, sliceCanvas.height, 0, 0, canvas.width, sliceCanvas.height);
+                sliceCtx.fillStyle = '#ffffff';
+                sliceCtx.fillRect(0, 0, sliceCanvas.width, sliceCanvas.height);
+                sliceCtx.drawImage(canvas, 0, srcY, canvas.width, srcH, 0, 0, canvas.width, srcH);
 
-                const sliceImgH = sliceCanvas.height * canvasToMm;
+                const sliceImgH = srcH * (imgWidth / canvas.width);
                 pdf.addImage(sliceCanvas.toDataURL('image/jpeg', 0.95), 'JPEG', margin, margin, imgWidth, sliceImgH);
-
-                currentPosMm += sliceHeightMm;
                 pageNum++;
-
-                // Safety: max 20 pages
-                if (pageNum > 20) break;
             }
 
             const name = document.getElementById('fieldName').value || 'campo';
@@ -371,6 +340,83 @@ const App = {
             btn.innerHTML = origText;
             btn.disabled = false;
         });
+    },
+
+    /**
+     * Scan canvas pixels to find safe horizontal cut points (white/empty rows)
+     * Returns array of {srcY, srcH} slices
+     */
+    findSafeCutPoints(canvas, pageHeightMm, imgWidthMm) {
+        const ctx = canvas.getContext('2d');
+        const canvasToMm = imgWidthMm / canvas.width;
+        const pageHeightPx = Math.round(pageHeightMm / canvasToMm);
+        const slices = [];
+
+        let currentY = 0;
+
+        while (currentY < canvas.height) {
+            const remaining = canvas.height - currentY;
+
+            // If remaining fits in one page, take it all
+            if (remaining <= pageHeightPx) {
+                slices.push({ srcY: currentY, srcH: remaining });
+                break;
+            }
+
+            // Target cut at full page height
+            const targetCut = currentY + pageHeightPx;
+
+            // Search backwards from target for a "safe" row (mostly white/light)
+            // Search in the last 25% of the page
+            const searchStart = Math.max(currentY + pageHeightPx * 0.7, currentY + 100);
+            let bestCutY = targetCut;
+            let bestScore = -1;
+
+            // Sample every 4 pixels for speed
+            for (let y = targetCut; y >= searchStart; y -= 4) {
+                if (y >= canvas.height) continue;
+                // Sample a horizontal strip (3 rows for stability)
+                const stripH = Math.min(3, canvas.height - y);
+                const rowData = ctx.getImageData(0, y, canvas.width, stripH);
+                const pixels = rowData.data;
+
+                let lightCount = 0;
+                const totalPixels = (canvas.width * stripH);
+                for (let i = 0; i < pixels.length; i += 16) { // sample every 4th pixel
+                    const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
+                    const brightness = (r + g + b) / 3;
+                    if (brightness > 235) lightCount++;
+                }
+                const score = lightCount / (totalPixels / 4);
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestCutY = y;
+                }
+                // If we found a nearly all-white row, use it
+                if (score > 0.92) break;
+            }
+
+            const sliceH = bestCutY - currentY;
+            if (sliceH < pageHeightPx * 0.3) {
+                // Safety: don't make slices too small
+                slices.push({ srcY: currentY, srcH: pageHeightPx });
+                currentY += pageHeightPx;
+            } else {
+                slices.push({ srcY: currentY, srcH: sliceH });
+                currentY += sliceH;
+            }
+
+            // Safety: max 25 pages
+            if (slices.length >= 25) {
+                if (currentY < canvas.height) {
+                    slices.push({ srcY: currentY, srcH: canvas.height - currentY });
+                }
+                break;
+            }
+        }
+
+        return slices;
     }
 };
 

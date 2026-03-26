@@ -1,6 +1,5 @@
 /**
- * mapRenderer.js - Render thematic maps to canvas for PDF export
- * Generates IP, Land Use Class, and Soil Series maps
+ * mapRenderer.js - Render thematic maps and satellite captures to canvas
  */
 const MapRenderer = {
 
@@ -9,10 +8,7 @@ const MapRenderer = {
     PADDING: 40,
 
     /**
-     * Generate all three thematic maps
-     * @param {GeoJSON} fieldGeoJSON - Field boundary
-     * @param {Array} soilUnits - Analysis soil units with geometry
-     * @returns {Object} { ipMap, classMap, seriesMap } as data URLs
+     * Generate thematic maps (synchronous)
      */
     generateAll(fieldGeoJSON, soilUnits) {
         const features = soilUnits.filter(u => u.geometry);
@@ -21,59 +17,422 @@ const MapRenderer = {
         return {
             ipMap: this.renderMap(fieldGeoJSON, features, bbox, 'ip'),
             classMap: this.renderMap(fieldGeoJSON, features, bbox, 'class'),
-            seriesMap: this.renderMap(fieldGeoJSON, features, bbox, 'series'),
-            ndviMap: this.renderNDVIMap(fieldGeoJSON, features, bbox)
+            seriesMap: this.renderMap(fieldGeoJSON, features, bbox, 'series')
         };
     },
 
     /**
-     * Render a single thematic map
+     * Generate satellite RGB captures for wet/dry year comparison (async)
      */
+    async generateSatelliteCaptures(fieldGeoJSON, wettestYear, driestYear) {
+        const results = {};
+
+        // Available S2 cloudless years from EOX (2018-2023) + Esri fallback
+        const eoxYears = [2018, 2019, 2020, 2021, 2022, 2023];
+
+        const wetYear = this.findClosestYear(wettestYear, eoxYears);
+        const dryYear = this.findClosestYear(driestYear, eoxYears);
+
+        // Esri satellite (current) as primary - always works with CORS
+        const esriTile = (z, y, x) =>
+            `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
+
+        // EOX Sentinel-2 cloudless by year
+        const eoxTile = (year) => (z, y, x) =>
+            `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-${year}_3857/default/GoogleMapsCompatible/${z}/${y}/${x}.jpg`;
+
+        // Try wet year
+        try {
+            results.wetImage = await this.renderSatelliteView(
+                fieldGeoJSON, eoxTile(wetYear),
+                `Imagen Satelital - Ano Lluvioso (${wetYear})`
+            );
+            results.wetYear = wetYear;
+        } catch (e) {
+            console.warn('EOX wet year failed, using Esri:', e.message);
+            try {
+                results.wetImage = await this.renderSatelliteView(
+                    fieldGeoJSON, esriTile,
+                    `Imagen Satelital - Referencia Actual`
+                );
+                results.wetYear = 'actual';
+            } catch (e2) { console.warn('Satellite capture failed:', e2.message); }
+        }
+
+        // Try dry year
+        try {
+            results.dryImage = await this.renderSatelliteView(
+                fieldGeoJSON, eoxTile(dryYear),
+                `Imagen Satelital - Ano Seco (${dryYear})`
+            );
+            results.dryYear = dryYear;
+        } catch (e) {
+            console.warn('EOX dry year failed:', e.message);
+        }
+
+        return results;
+    },
+
+    findClosestYear(target, available) {
+        return available.reduce((prev, curr) =>
+            Math.abs(curr - target) < Math.abs(prev - target) ? curr : prev
+        );
+    },
+
+    /**
+     * Capture satellite imagery for a field from tile service
+     */
+    async renderSatelliteView(fieldGeoJSON, tileUrlFn, title) {
+        const W = this.CANVAS_WIDTH, H = this.CANVAS_HEIGHT;
+        const bbox = turf.bbox(fieldGeoJSON);
+
+        // Expand bbox for context
+        const expandLon = (bbox[2] - bbox[0]) * 0.2;
+        const expandLat = (bbox[3] - bbox[1]) * 0.2;
+        const viewBbox = [
+            bbox[0] - expandLon, bbox[1] - expandLat,
+            bbox[2] + expandLon, bbox[3] + expandLat
+        ];
+
+        const zoom = this.getZoomForBbox(viewBbox, W, H);
+        const minTile = this.lonLatToTile(viewBbox[0], viewBbox[3], zoom);
+        const maxTile = this.lonLatToTile(viewBbox[2], viewBbox[1], zoom);
+
+        // Create tile canvas
+        const tilesX = maxTile.x - minTile.x + 1;
+        const tilesY = maxTile.y - minTile.y + 1;
+        const tileCanvas = document.createElement('canvas');
+        tileCanvas.width = tilesX * 256;
+        tileCanvas.height = tilesY * 256;
+        const tileCtx = tileCanvas.getContext('2d');
+
+        tileCtx.fillStyle = '#2a2a3a';
+        tileCtx.fillRect(0, 0, tileCanvas.width, tileCanvas.height);
+
+        // Load all tiles in parallel
+        const promises = [];
+        let loadedCount = 0;
+        for (let tx = minTile.x; tx <= maxTile.x; tx++) {
+            for (let ty = minTile.y; ty <= maxTile.y; ty++) {
+                const url = tileUrlFn(zoom, ty, tx);
+                const px = (tx - minTile.x) * 256;
+                const py = (ty - minTile.y) * 256;
+                promises.push(
+                    this.loadTileImg(url).then(img => {
+                        tileCtx.drawImage(img, px, py, 256, 256);
+                        loadedCount++;
+                    }).catch(() => {})
+                );
+            }
+        }
+        await Promise.all(promises);
+
+        if (loadedCount === 0) throw new Error('No tiles loaded');
+
+        // Create output canvas
+        const canvas = document.createElement('canvas');
+        canvas.width = W;
+        canvas.height = H;
+        const ctx = canvas.getContext('2d');
+
+        // Map tile canvas to output
+        const srcTL = this.lonLatToPixelInGrid(viewBbox[0], viewBbox[3], zoom, minTile.x, minTile.y);
+        const srcBR = this.lonLatToPixelInGrid(viewBbox[2], viewBbox[1], zoom, minTile.x, minTile.y);
+        const srcW = srcBR[0] - srcTL[0];
+        const srcH = srcBR[1] - srcTL[1];
+
+        ctx.drawImage(tileCanvas, srcTL[0], srcTL[1], srcW, srcH, 0, 0, W, H);
+
+        // Projection for overlay
+        const proj = {
+            project: (lon, lat) => {
+                const px = this.lonLatToPixelInGrid(lon, lat, zoom, minTile.x, minTile.y);
+                return [(px[0] - srcTL[0]) / srcW * W, (px[1] - srcTL[1]) / srcH * H];
+            }
+        };
+
+        // Field boundary (white + green double line)
+        const fieldGeom = fieldGeoJSON.features[0].geometry;
+        this.drawGeometry(ctx, fieldGeom, proj, null, 'rgba(255,255,255,0.8)', 3.5);
+        this.drawGeometry(ctx, fieldGeom, proj, null, '#2d6a4f', 1.5);
+
+        // Semi-transparent mask OUTSIDE the field
+        this.drawOutsideMask(ctx, fieldGeom, proj, W, H);
+
+        // Title bar
+        ctx.fillStyle = 'rgba(0,0,0,0.65)';
+        ctx.fillRect(0, 0, W, 32);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 14px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(title, W / 2, 16);
+
+        // North arrow + attribution
+        this.drawNorthArrowWhite(ctx, W - 25, 52);
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.font = '9px Arial, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText('Sentinel-2 / Esri', W - 8, H - 6);
+
+        return canvas.toDataURL('image/jpeg', 0.92);
+    },
+
+    drawOutsideMask(ctx, fieldGeom, proj, W, H) {
+        ctx.save();
+        ctx.beginPath();
+        // Outer rectangle (full canvas)
+        ctx.rect(0, 0, W, H);
+
+        // Inner path (field boundary) - counter-clockwise to create a hole
+        const rings = fieldGeom.type === 'Polygon' ?
+            [fieldGeom.coordinates[0]] :
+            fieldGeom.coordinates.map(p => p[0]);
+
+        for (const ring of rings) {
+            for (let i = ring.length - 1; i >= 0; i--) {
+                const [x, y] = proj.project(ring[i][0], ring[i][1]);
+                if (i === ring.length - 1) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.closePath();
+        }
+
+        ctx.fillStyle = 'rgba(0,0,0,0.35)';
+        ctx.fill('evenodd');
+        ctx.restore();
+    },
+
+    /**
+     * Render NDVI time series chart on canvas
+     */
+    renderNDVIChart(ndviData, precipData) {
+        const W = this.CANVAS_WIDTH, H = 380;
+        const canvas = document.createElement('canvas');
+        canvas.width = W;
+        canvas.height = H;
+        const ctx = canvas.getContext('2d');
+
+        // Background
+        ctx.fillStyle = '#fafafa';
+        ctx.fillRect(0, 0, W, H);
+
+        if (!ndviData || !ndviData.yearlyAvg || ndviData.yearlyAvg.length === 0) {
+            ctx.fillStyle = '#999';
+            ctx.font = '14px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('Datos NDVI no disponibles', W / 2, H / 2);
+            return canvas.toDataURL('image/png');
+        }
+
+        const years = ndviData.yearlyAvg;
+        const margin = { top: 50, right: 60, bottom: 55, left: 55 };
+        const chartW = W - margin.left - margin.right;
+        const chartH = H - margin.top - margin.bottom;
+
+        // Y axis: NDVI 0 to 0.8
+        const yMin = 0, yMax = 0.8;
+        const toX = (i) => margin.left + (i + 0.5) / years.length * chartW;
+        const toY = (v) => margin.top + (1 - (v - yMin) / (yMax - yMin)) * chartH;
+
+        // Grid lines
+        ctx.strokeStyle = '#e0e0e0';
+        ctx.lineWidth = 0.5;
+        for (let v = 0; v <= 0.8; v += 0.1) {
+            const y = toY(v);
+            ctx.beginPath(); ctx.moveTo(margin.left, y); ctx.lineTo(W - margin.right, y); ctx.stroke();
+        }
+
+        // Bars
+        const barW = Math.min(40, chartW / years.length * 0.7);
+        for (let i = 0; i < years.length; i++) {
+            const yr = years[i];
+            const x = toX(i) - barW / 2;
+            const y = toY(yr.ndvi);
+            const h = toY(yMin) - y;
+
+            // Bar gradient
+            const grad = ctx.createLinearGradient(x, y, x, toY(yMin));
+            if (yr.ndvi >= 0.5) {
+                grad.addColorStop(0, '#2d6a4f');
+                grad.addColorStop(1, '#52b788');
+            } else if (yr.ndvi >= 0.35) {
+                grad.addColorStop(0, '#52b788');
+                grad.addColorStop(1, '#95d5b2');
+            } else {
+                grad.addColorStop(0, '#d4a373');
+                grad.addColorStop(1, '#e9c46a');
+            }
+
+            ctx.fillStyle = grad;
+            ctx.fillRect(x, y, barW, h);
+
+            // Border
+            ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+            ctx.lineWidth = 0.5;
+            ctx.strokeRect(x, y, barW, h);
+
+            // NDVI value on top
+            ctx.fillStyle = '#333';
+            ctx.font = 'bold 11px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(yr.ndvi.toFixed(2), toX(i), y - 6);
+
+            // Year label
+            ctx.fillStyle = '#666';
+            ctx.font = '11px Arial';
+            ctx.fillText(yr.year, toX(i), toY(yMin) + 16);
+        }
+
+        // Average line
+        if (ndviData.avgNDVI) {
+            const avgY = toY(ndviData.avgNDVI);
+            ctx.setLineDash([6, 4]);
+            ctx.strokeStyle = '#e63946';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath(); ctx.moveTo(margin.left, avgY); ctx.lineTo(W - margin.right, avgY); ctx.stroke();
+            ctx.setLineDash([]);
+
+            ctx.fillStyle = '#e63946';
+            ctx.font = 'bold 10px Arial';
+            ctx.textAlign = 'left';
+            ctx.fillText(`Prom: ${ndviData.avgNDVI}`, W - margin.right + 5, avgY + 4);
+        }
+
+        // Precipitation overlay (if available) - line chart on secondary axis
+        if (precipData && precipData.yearlyData && precipData.yearlyData.length === years.length) {
+            const precips = precipData.yearlyData;
+            const maxPrecip = Math.max(...precips.map(p => p.precip));
+            const minPrecip = Math.min(...precips.map(p => p.precip));
+            const precipToY = (v) => margin.top + (1 - (v - minPrecip * 0.8) / (maxPrecip * 1.1 - minPrecip * 0.8)) * chartH;
+
+            ctx.strokeStyle = '#4895ef';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            for (let i = 0; i < precips.length; i++) {
+                const x = toX(i);
+                const y = precipToY(precips[i].precip);
+                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+
+            // Precip dots
+            for (let i = 0; i < precips.length; i++) {
+                const x = toX(i);
+                const y = precipToY(precips[i].precip);
+                ctx.fillStyle = '#4895ef';
+                ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+
+                // Precip value
+                ctx.fillStyle = '#4895ef';
+                ctx.font = '9px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(`${precips[i].precip}mm`, x, y - 10);
+            }
+
+            // Right Y axis label for precip
+            ctx.save();
+            ctx.fillStyle = '#4895ef';
+            ctx.font = '11px Arial';
+            ctx.translate(W - 10, margin.top + chartH / 2);
+            ctx.rotate(-Math.PI / 2);
+            ctx.textAlign = 'center';
+            ctx.fillText('Precipitacion (mm)', 0, 0);
+            ctx.restore();
+        }
+
+        // Y axis label
+        ctx.save();
+        ctx.fillStyle = '#2d6a4f';
+        ctx.font = '11px Arial';
+        ctx.translate(15, margin.top + chartH / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.textAlign = 'center';
+        ctx.fillText('NDVI', 0, 0);
+        ctx.restore();
+
+        // Y axis ticks
+        ctx.fillStyle = '#888';
+        ctx.font = '10px Arial';
+        ctx.textAlign = 'right';
+        for (let v = 0; v <= 0.8; v += 0.2) {
+            ctx.fillText(v.toFixed(1), margin.left - 8, toY(v) + 4);
+        }
+
+        // Title
+        ctx.fillStyle = '#1b4332';
+        ctx.font = 'bold 15px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('NDVI Historico vs Precipitacion Anual', W / 2, 20);
+
+        // Subtitle
+        ctx.fillStyle = '#888';
+        ctx.font = '11px Arial';
+        ctx.fillText(`${ndviData.source} | Periodo: ${ndviData.period}`, W / 2, 36);
+
+        // Legend
+        const legX = margin.left + 10;
+        const legY = H - 18;
+        ctx.fillStyle = '#2d6a4f';
+        ctx.fillRect(legX, legY - 8, 12, 8);
+        ctx.fillStyle = '#555';
+        ctx.font = '10px Arial';
+        ctx.textAlign = 'left';
+        ctx.fillText('NDVI', legX + 16, legY);
+
+        ctx.strokeStyle = '#4895ef'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(legX + 65, legY - 4); ctx.lineTo(legX + 80, legY - 4); ctx.stroke();
+        ctx.fillStyle = '#555';
+        ctx.fillText('Lluvia', legX + 85, legY);
+
+        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = '#e63946'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(legX + 130, legY - 4); ctx.lineTo(legX + 148, legY - 4); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#555';
+        ctx.fillText('Promedio NDVI', legX + 153, legY);
+
+        return canvas.toDataURL('image/png');
+    },
+
+    // === THEMATIC MAP RENDERING (existing) ===
+
     renderMap(fieldGeoJSON, features, bbox, type) {
         const canvas = document.createElement('canvas');
         canvas.width = this.CANVAS_WIDTH;
         canvas.height = this.CANVAS_HEIGHT;
         const ctx = canvas.getContext('2d');
 
-        // White background
         ctx.fillStyle = '#f8f9fa';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        // Calculate projection
         const proj = this.getProjection(bbox, canvas.width, canvas.height, this.PADDING);
-
-        // Get color function and legend data
         const { colorFn, legend, title } = this.getTheme(type, features);
 
-        // Draw soil unit polygons
         for (const unit of features) {
             const geom = unit.geometry.geometry || unit.geometry;
             const color = colorFn(unit);
             this.drawGeometry(ctx, geom, proj, color, '#555', 0.5);
         }
 
-        // Draw field boundary on top
         const fieldGeom = fieldGeoJSON.features[0].geometry;
         this.drawGeometry(ctx, fieldGeom, proj, null, '#1b4332', 2.5);
 
-        // Draw title
         ctx.fillStyle = '#1b4332';
         ctx.font = 'bold 16px Arial, sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText(title, canvas.width / 2, 22);
 
-        // Draw legend
         this.drawLegend(ctx, legend, canvas.width, canvas.height);
-
-        // Draw north arrow
         this.drawNorthArrow(ctx, canvas.width - 30, 50);
 
         return canvas.toDataURL('image/png');
     },
 
+    // === PROJECTION & GEOMETRY ===
+
     getProjection(bbox, width, height, padding) {
         const [minLon, minLat, maxLon, maxLat] = bbox;
-        // Account for aspect ratio with lat correction
         const midLat = (minLat + maxLat) / 2;
         const latCorrFactor = Math.cos(midLat * Math.PI / 180);
 
@@ -81,8 +440,7 @@ const MapRenderer = {
         const geoHeight = maxLat - minLat;
 
         const availW = width - 2 * padding;
-        const availH = height - 2 * padding - 30; // reserve space for title
-
+        const availH = height - 2 * padding - 30;
         const scale = Math.min(availW / geoWidth, availH / geoHeight);
 
         const offsetX = padding + (availW - geoWidth * scale) / 2;
@@ -100,20 +458,14 @@ const MapRenderer = {
     drawGeometry(ctx, geometry, proj, fillColor, strokeColor, lineWidth) {
         const type = geometry.type;
         let rings;
-
-        if (type === 'Polygon') {
-            rings = [geometry.coordinates];
-        } else if (type === 'MultiPolygon') {
-            rings = geometry.coordinates;
-        } else {
-            return;
-        }
+        if (type === 'Polygon') rings = [geometry.coordinates];
+        else if (type === 'MultiPolygon') rings = geometry.coordinates;
+        else return;
 
         for (const polygon of rings) {
             for (let ri = 0; ri < polygon.length; ri++) {
                 const ring = polygon[ri];
                 if (ring.length < 3) continue;
-
                 ctx.beginPath();
                 const [x0, y0] = proj.project(ring[0][0], ring[0][1]);
                 ctx.moveTo(x0, y0);
@@ -122,24 +474,59 @@ const MapRenderer = {
                     ctx.lineTo(x, y);
                 }
                 ctx.closePath();
-
-                if (ri === 0 && fillColor) {
-                    ctx.fillStyle = fillColor;
-                    ctx.fill();
-                }
-                if (strokeColor) {
-                    ctx.strokeStyle = strokeColor;
-                    ctx.lineWidth = lineWidth || 1;
-                    ctx.stroke();
-                }
+                if (ri === 0 && fillColor) { ctx.fillStyle = fillColor; ctx.fill(); }
+                if (strokeColor) { ctx.strokeStyle = strokeColor; ctx.lineWidth = lineWidth || 1; ctx.stroke(); }
             }
         }
     },
 
+    // === TILE HELPERS ===
+
+    lonLatToTile(lon, lat, zoom) {
+        const n = Math.pow(2, zoom);
+        const x = Math.floor((lon + 180) / 360 * n);
+        const latRad = lat * Math.PI / 180;
+        const y = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
+        return { x: Math.max(0, Math.min(n - 1, x)), y: Math.max(0, Math.min(n - 1, y)) };
+    },
+
+    lonLatToPixelInGrid(lon, lat, zoom, minTileX, minTileY) {
+        const n = Math.pow(2, zoom);
+        const x = ((lon + 180) / 360 * n - minTileX) * 256;
+        const latRad = lat * Math.PI / 180;
+        const y = ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n - minTileY) * 256;
+        return [x, y];
+    },
+
+    getZoomForBbox(bbox, width, height) {
+        for (let z = 16; z >= 1; z--) {
+            const tl = this.lonLatToTile(bbox[0], bbox[3], z);
+            const br = this.lonLatToTile(bbox[2], bbox[1], z);
+            const tilesX = br.x - tl.x + 1;
+            const tilesY = br.y - tl.y + 1;
+            // Keep tile count reasonable (max ~4x3 tiles)
+            if (tilesX <= 5 && tilesY <= 4) return z;
+        }
+        return 10;
+    },
+
+    loadTileImg(url) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            const timeout = setTimeout(() => reject(new Error('timeout')), 8000);
+            img.onload = () => { clearTimeout(timeout); resolve(img); };
+            img.onerror = () => { clearTimeout(timeout); reject(new Error('load error')); };
+            img.src = url;
+        });
+    },
+
+    // === THEME DEFINITIONS ===
+
     getTheme(type, features) {
         if (type === 'ip') {
             return {
-                title: 'Mapa de Índice de Productividad (IP)',
+                title: 'Mapa de Indice de Productividad (IP)',
                 colorFn: (unit) => {
                     const ip = unit.ip;
                     if (ip == null || ip <= 0) return '#cccccc';
@@ -149,7 +536,7 @@ const MapRenderer = {
                     return '#ef476f';
                 },
                 legend: [
-                    { color: '#2d6a4f', label: 'IP ≥ 65 (Alto)' },
+                    { color: '#2d6a4f', label: 'IP >= 65 (Alto)' },
                     { color: '#52b788', label: 'IP 50-64 (Medio-Alto)' },
                     { color: '#ffd166', label: 'IP 35-49 (Medio)' },
                     { color: '#ef476f', label: 'IP < 35 (Bajo)' },
@@ -157,7 +544,6 @@ const MapRenderer = {
                 ]
             };
         }
-
         if (type === 'class') {
             const classColors = {
                 '1': '#1a9850', '2': '#66bd63', '3': '#a6d96a',
@@ -168,20 +554,14 @@ const MapRenderer = {
                 title: 'Mapa de Clase de Uso de Suelo',
                 colorFn: (unit) => classColors[String(unit.cu)] || '#cccccc',
                 legend: [
-                    { color: '#1a9850', label: 'Clase I' },
-                    { color: '#66bd63', label: 'Clase II' },
-                    { color: '#a6d96a', label: 'Clase III' },
-                    { color: '#d9ef8b', label: 'Clase IV' },
-                    { color: '#fee08b', label: 'Clase V' },
-                    { color: '#fdae61', label: 'Clase VI' },
-                    { color: '#f46d43', label: 'Clase VII' },
-                    { color: '#d73027', label: 'Clase VIII' }
+                    { color: '#1a9850', label: 'Clase I' }, { color: '#66bd63', label: 'Clase II' },
+                    { color: '#a6d96a', label: 'Clase III' }, { color: '#d9ef8b', label: 'Clase IV' },
+                    { color: '#fee08b', label: 'Clase V' }, { color: '#fdae61', label: 'Clase VI' },
+                    { color: '#f46d43', label: 'Clase VII' }, { color: '#d73027', label: 'Clase VIII' }
                 ]
             };
         }
-
         if (type === 'series') {
-            // Generate distinct colors for each unique unit
             const unitIds = [...new Set(features.map(f => f.textUserId))];
             const palette = [
                 '#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231',
@@ -191,307 +571,68 @@ const MapRenderer = {
             ];
             const colorMap = {};
             unitIds.forEach((id, i) => { colorMap[id] = palette[i % palette.length]; });
-
             return {
                 title: 'Mapa de Series de Suelo',
                 colorFn: (unit) => colorMap[unit.textUserId] || '#cccccc',
-                legend: unitIds.map((id, i) => ({
-                    color: palette[i % palette.length],
-                    label: id
-                }))
+                legend: unitIds.map((id, i) => ({ color: palette[i % palette.length], label: id }))
             };
         }
-
         return { title: '', colorFn: () => '#ccc', legend: [] };
     },
 
+    // === DECORATIONS ===
+
     drawLegend(ctx, legend, canvasWidth, canvasHeight) {
-        const itemH = 18;
-        const boxSize = 12;
+        const itemH = 18, boxSize = 12;
         const maxItems = Math.min(legend.length, 10);
         const legendH = maxItems * itemH + 16;
         const legendW = 160;
         const x = canvasWidth - legendW - 10;
         const y = canvasHeight - legendH - 10;
 
-        // Background
         ctx.fillStyle = 'rgba(255,255,255,0.92)';
-        ctx.strokeStyle = '#aaa';
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = '#aaa'; ctx.lineWidth = 1;
         ctx.fillRect(x, y, legendW, legendH);
         ctx.strokeRect(x, y, legendW, legendH);
 
-        // Items
-        ctx.font = '11px Arial, sans-serif';
-        ctx.textAlign = 'left';
+        ctx.font = '11px Arial, sans-serif'; ctx.textAlign = 'left';
         for (let i = 0; i < maxItems; i++) {
             const item = legend[i];
             const iy = y + 10 + i * itemH;
-
             ctx.fillStyle = item.color;
             ctx.fillRect(x + 8, iy, boxSize, boxSize);
-            ctx.strokeStyle = '#666';
-            ctx.lineWidth = 0.5;
+            ctx.strokeStyle = '#666'; ctx.lineWidth = 0.5;
             ctx.strokeRect(x + 8, iy, boxSize, boxSize);
-
             ctx.fillStyle = '#333';
             ctx.fillText(item.label, x + 8 + boxSize + 6, iy + 10);
         }
-
         if (legend.length > maxItems) {
-            ctx.fillStyle = '#999';
-            ctx.font = '10px Arial, sans-serif';
-            ctx.fillText(`... y ${legend.length - maxItems} más`, x + 8, y + legendH - 4);
+            ctx.fillStyle = '#999'; ctx.font = '10px Arial';
+            ctx.fillText(`... y ${legend.length - maxItems} mas`, x + 8, y + legendH - 4);
         }
     },
 
     drawNorthArrow(ctx, x, y) {
         ctx.save();
         ctx.fillStyle = '#1b4332';
-        ctx.font = 'bold 14px Arial, sans-serif';
-        ctx.textAlign = 'center';
+        ctx.font = 'bold 14px Arial'; ctx.textAlign = 'center';
         ctx.fillText('N', x, y - 12);
-
         ctx.beginPath();
-        ctx.moveTo(x, y - 8);
-        ctx.lineTo(x - 5, y + 4);
-        ctx.lineTo(x, y + 1);
-        ctx.lineTo(x + 5, y + 4);
-        ctx.closePath();
-        ctx.fill();
+        ctx.moveTo(x, y - 8); ctx.lineTo(x - 5, y + 4);
+        ctx.lineTo(x, y + 1); ctx.lineTo(x + 5, y + 4);
+        ctx.closePath(); ctx.fill();
         ctx.restore();
-    },
-
-    /**
-     * Render an interpolated NDVI/productivity map with smooth gradients
-     * Uses IP as proxy for NDVI estimation, with gaussian blur for smooth look
-     */
-    renderNDVIMap(fieldGeoJSON, features, bbox) {
-        const W = this.CANVAS_WIDTH;
-        const H = this.CANVAS_HEIGHT;
-        const canvas = document.createElement('canvas');
-        canvas.width = W;
-        canvas.height = H;
-        const ctx = canvas.getContext('2d');
-
-        // Dark background (satellite feel)
-        ctx.fillStyle = '#1a1a2e';
-        ctx.fillRect(0, 0, W, H);
-
-        const proj = this.getProjection(bbox, W, H, this.PADDING);
-
-        // Step 1: Draw soil units with NDVI gradient colors on a temp canvas
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = W;
-        tempCanvas.height = H;
-        const tempCtx = tempCanvas.getContext('2d');
-
-        for (const unit of features) {
-            const geom = unit.geometry.geometry || unit.geometry;
-            const ip = unit.ip || 0;
-            // Convert IP (0-100) to estimated NDVI (0.1-0.75)
-            const ndvi = 0.1 + (ip / 100) * 0.65;
-            const color = this.ndviColor(ndvi);
-            this.drawGeometry(tempCtx, geom, proj, color, null, 0);
-        }
-
-        // Step 2: Create field boundary mask
-        const maskCanvas = document.createElement('canvas');
-        maskCanvas.width = W;
-        maskCanvas.height = H;
-        const maskCtx = maskCanvas.getContext('2d');
-        const fieldGeom = fieldGeoJSON.features[0].geometry;
-        this.drawGeometry(maskCtx, fieldGeom, proj, '#fff', null, 0);
-
-        // Step 3: Apply gaussian blur for smooth interpolated look
-        const blurCanvas = document.createElement('canvas');
-        blurCanvas.width = W;
-        blurCanvas.height = H;
-        const blurCtx = blurCanvas.getContext('2d');
-        blurCtx.filter = 'blur(8px)';
-        blurCtx.drawImage(tempCanvas, 0, 0);
-        blurCtx.filter = 'none';
-
-        // Step 4: Draw blurred colors, then sharp colors at lower opacity on top
-        // Clip to field boundary
-        ctx.save();
-        this.clipToField(ctx, fieldGeom, proj);
-
-        // Blurred base (smooth interpolation feel)
-        ctx.drawImage(blurCanvas, 0, 0);
-
-        // Sharp overlay at 50% for definition
-        ctx.globalAlpha = 0.5;
-        ctx.drawImage(tempCanvas, 0, 0);
-        ctx.globalAlpha = 1.0;
-
-        ctx.restore();
-
-        // Step 5: Draw thin unit boundaries (subtle)
-        for (const unit of features) {
-            const geom = unit.geometry.geometry || unit.geometry;
-            this.drawGeometry(ctx, geom, proj, null, 'rgba(255,255,255,0.25)', 0.5);
-        }
-
-        // Step 6: Draw field boundary (strong)
-        this.drawGeometry(ctx, fieldGeom, proj, null, '#ffffff', 2.5);
-
-        // Step 7: Add IP labels on each unit
-        ctx.font = 'bold 12px Arial, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        for (const unit of features) {
-            if (unit.percentage < 3) continue; // skip tiny units
-            const geom = unit.geometry.geometry || unit.geometry;
-            try {
-                const centroid = turf.centroid(unit.geometry.geometry ? unit.geometry : turf.feature(geom));
-                const [cx, cy] = proj.project(centroid.geometry.coordinates[0], centroid.geometry.coordinates[1]);
-                const ip = unit.ip || 0;
-                // Text shadow for readability
-                ctx.fillStyle = 'rgba(0,0,0,0.7)';
-                ctx.fillText(ip, cx + 1, cy + 1);
-                ctx.fillStyle = '#ffffff';
-                ctx.fillText(ip, cx, cy);
-            } catch (e) { /* skip */ }
-        }
-
-        // Title
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 16px Arial, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'top';
-        ctx.fillText('Mapa de NDVI / Productividad Estimada', W / 2, 8);
-        ctx.font = '11px Arial, sans-serif';
-        ctx.fillStyle = 'rgba(255,255,255,0.7)';
-        ctx.fillText('Basado en IP del suelo (proxy de vigor vegetal)', W / 2, 28);
-
-        // North arrow (white version)
-        this.drawNorthArrowWhite(ctx, W - 30, 55);
-
-        // Gradient legend bar
-        this.drawNDVILegend(ctx, W, H);
-
-        return canvas.toDataURL('image/png');
-    },
-
-    clipToField(ctx, fieldGeom, proj) {
-        const type = fieldGeom.type;
-        let coords;
-        if (type === 'Polygon') {
-            coords = [fieldGeom.coordinates[0]];
-        } else if (type === 'MultiPolygon') {
-            coords = fieldGeom.coordinates.map(p => p[0]);
-        } else return;
-
-        ctx.beginPath();
-        for (const ring of coords) {
-            const [x0, y0] = proj.project(ring[0][0], ring[0][1]);
-            ctx.moveTo(x0, y0);
-            for (let i = 1; i < ring.length; i++) {
-                const [x, y] = proj.project(ring[i][0], ring[i][1]);
-                ctx.lineTo(x, y);
-            }
-            ctx.closePath();
-        }
-        ctx.clip();
-    },
-
-    /**
-     * NDVI color scale: brown -> yellow -> green (satellite style)
-     */
-    ndviColor(ndvi) {
-        // Clamp
-        const v = Math.max(0, Math.min(1, ndvi));
-        // Color stops: 0.0=brown, 0.2=tan, 0.35=yellow, 0.5=lime, 0.65=green, 0.8=dark green
-        const stops = [
-            { at: 0.00, r: 139, g: 90, b: 43 },   // brown (bare soil)
-            { at: 0.15, r: 189, g: 146, b: 72 },   // tan
-            { at: 0.25, r: 215, g: 192, b: 88 },   // yellow-brown
-            { at: 0.35, r: 232, g: 220, b: 80 },   // yellow
-            { at: 0.45, r: 180, g: 210, b: 60 },   // yellow-green
-            { at: 0.55, r: 100, g: 180, b: 50 },   // light green
-            { at: 0.65, r: 40, g: 150, b: 40 },     // green
-            { at: 0.80, r: 15, g: 110, b: 30 },     // dark green
-            { at: 1.00, r: 0, g: 80, b: 20 }        // very dark green
-        ];
-
-        // Find segment
-        let lo = stops[0], hi = stops[stops.length - 1];
-        for (let i = 0; i < stops.length - 1; i++) {
-            if (v >= stops[i].at && v <= stops[i + 1].at) {
-                lo = stops[i];
-                hi = stops[i + 1];
-                break;
-            }
-        }
-
-        const t = (hi.at === lo.at) ? 0 : (v - lo.at) / (hi.at - lo.at);
-        const r = Math.round(lo.r + (hi.r - lo.r) * t);
-        const g = Math.round(lo.g + (hi.g - lo.g) * t);
-        const b = Math.round(lo.b + (hi.b - lo.b) * t);
-
-        return `rgb(${r},${g},${b})`;
-    },
-
-    drawNDVILegend(ctx, canvasWidth, canvasHeight) {
-        const barW = 20;
-        const barH = 180;
-        const x = canvasWidth - 55;
-        const y = canvasHeight - barH - 50;
-
-        // Background panel
-        ctx.fillStyle = 'rgba(0,0,0,0.6)';
-        const panelW = 50;
-        ctx.fillRect(x - 8, y - 25, panelW, barH + 55);
-
-        // Title
-        ctx.fillStyle = '#fff';
-        ctx.font = 'bold 10px Arial, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('NDVI', x + barW / 2, y - 10);
-
-        // Gradient bar
-        for (let i = 0; i < barH; i++) {
-            const ndvi = 0.8 - (i / barH) * 0.7; // top=0.8, bottom=0.1
-            ctx.fillStyle = this.ndviColor(ndvi);
-            ctx.fillRect(x, y + i, barW, 1);
-        }
-
-        // Border
-        ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x, y, barW, barH);
-
-        // Labels
-        ctx.fillStyle = '#fff';
-        ctx.font = '9px Arial, sans-serif';
-        ctx.textAlign = 'left';
-        const labels = [
-            { val: '0.8', yPos: 0 },
-            { val: '0.6', yPos: barH * 0.29 },
-            { val: '0.4', yPos: barH * 0.57 },
-            { val: '0.2', yPos: barH * 0.86 },
-            { val: '0.1', yPos: barH }
-        ];
-        for (const lb of labels) {
-            ctx.fillText(lb.val, x + barW + 3, y + lb.yPos + 3);
-        }
     },
 
     drawNorthArrowWhite(ctx, x, y) {
         ctx.save();
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 14px Arial, sans-serif';
-        ctx.textAlign = 'center';
+        ctx.font = 'bold 14px Arial'; ctx.textAlign = 'center';
         ctx.fillText('N', x, y - 12);
-
         ctx.beginPath();
-        ctx.moveTo(x, y - 8);
-        ctx.lineTo(x - 5, y + 4);
-        ctx.lineTo(x, y + 1);
-        ctx.lineTo(x + 5, y + 4);
-        ctx.closePath();
-        ctx.fill();
+        ctx.moveTo(x, y - 8); ctx.lineTo(x - 5, y + 4);
+        ctx.lineTo(x, y + 1); ctx.lineTo(x + 5, y + 4);
+        ctx.closePath(); ctx.fill();
         ctx.restore();
     }
 };
