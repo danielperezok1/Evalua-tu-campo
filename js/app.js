@@ -6,6 +6,7 @@ const App = {
     fieldGeoJSON: null,
     map: null,
     analysisResults: null,
+    soilLayer: null,
 
     init() {
         this.setupMap();
@@ -14,10 +15,10 @@ const App = {
     },
 
     setupMap() {
-        this.map = L.map('map').setView([-32.0, -63.5], 8);
+        this.map = L.map('map').setView([-32.5, -63.5], 7);
 
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '© OpenStreetMap contributors',
+            attribution: '&copy; OpenStreetMap contributors',
             maxZoom: 18
         }).addTo(this.map);
 
@@ -53,13 +54,23 @@ const App = {
         });
 
         document.getElementById('clearFile').addEventListener('click', () => {
-            this.fieldGeoJSON = null;
-            fileInput.value = '';
-            document.getElementById('fileInfo').classList.add('d-none');
-            document.getElementById('analyzeBtn').disabled = true;
-            this.fieldLayer.clearLayers();
-            this.map.setView([-32.0, -63.5], 8);
+            this.clearField();
         });
+    },
+
+    clearField() {
+        this.fieldGeoJSON = null;
+        this.analysisResults = null;
+        document.getElementById('fileInput').value = '';
+        document.getElementById('fileInfo').classList.add('d-none');
+        document.getElementById('analyzeBtn').disabled = true;
+        document.getElementById('results').classList.add('d-none');
+        this.fieldLayer.clearLayers();
+        if (this.soilLayer) {
+            this.map.removeLayer(this.soilLayer);
+            this.soilLayer = null;
+        }
+        this.map.setView([-32.5, -63.5], 7);
     },
 
     setupEventListeners() {
@@ -74,32 +85,27 @@ const App = {
         try {
             this.fieldGeoJSON = await FileParser.parse(file);
 
-            // Show file info
             document.getElementById('fileName').textContent = file.name;
             document.getElementById('fileInfo').classList.remove('d-none');
 
-            // Add to map
             this.fieldLayer.clearLayers();
             const geoJsonLayer = L.geoJSON(this.fieldGeoJSON, {
                 style: {
                     color: '#2d6a4f',
-                    weight: 2,
-                    opacity: 0.8,
-                    fillOpacity: 0.2
+                    weight: 3,
+                    opacity: 0.9,
+                    fillOpacity: 0.15,
+                    fillColor: '#2d6a4f'
                 }
             }).addTo(this.fieldLayer);
 
-            // Zoom to bounds
-            const bounds = geoJsonLayer.getBounds();
-            this.map.fitBounds(bounds, { padding: [50, 50] });
-
-            // Enable analyze button
+            this.map.fitBounds(geoJsonLayer.getBounds(), { padding: [50, 50] });
             document.getElementById('analyzeBtn').disabled = false;
 
         } catch (error) {
             errorDiv.textContent = error.message;
             errorDiv.classList.remove('d-none');
-            console.error(error);
+            console.error('Error parsing file:', error);
         }
     },
 
@@ -111,71 +117,124 @@ const App = {
         document.getElementById('loading').classList.remove('d-none');
 
         try {
-            document.getElementById('loadingText').textContent = 'Cargando datos de suelo...';
+            // Step 1: Load soil data
+            this.updateLoading('Buscando hojas de suelo...');
+            const bbox = turf.bbox(this.fieldGeoJSON);
+            // bbox is [minLon, minLat, maxLon, maxLat] - pass as array
+            const soilData = await SoilData.loadForBoundingBox(bbox);
 
-            // Get bounding box of field
-            const bounds = turf.bbox(this.fieldGeoJSON);
-            const fieldBbox = {
-                minLon: bounds[0],
-                minLat: bounds[1],
-                maxLon: bounds[2],
-                maxLat: bounds[3]
-            };
-
-            // Load soil data
-            const soilData = await SoilData.loadForBoundingBox(fieldBbox);
-
-            document.getElementById('loadingText').textContent = 'Analizando intersecciones...';
-
-            // Analyze
+            // Step 2: Spatial analysis
+            this.updateLoading('Analizando intersecciones espaciales...');
             this.analysisResults = Analysis.analyze(this.fieldGeoJSON, soilData);
 
-            // Generate report
+            // Step 3: Climate data
+            this.updateLoading('Consultando datos climáticos...');
+            const centroid = turf.centroid(this.fieldGeoJSON);
+            const [lon, lat] = centroid.geometry.coordinates;
+            let climateData = null;
+            try {
+                climateData = await Climate.fetchHistorical(lat, lon);
+            } catch (e) {
+                console.warn('No se pudo obtener clima:', e.message);
+            }
+
+            // Step 4: Generate report
+            this.updateLoading('Generando informe...');
             const options = {
                 reportType: document.querySelector('input[name="reportType"]:checked').value,
                 fieldName: document.getElementById('fieldName').value,
                 detailLevel: document.getElementById('detailLevel').value
             };
 
-            const reportHTML = Report.generate(this.analysisResults, options);
+            const reportHTML = Report.generate(this.analysisResults, options, climateData);
 
             // Show results
-            document.getElementById('loadingText').textContent = 'Completado.';
             document.getElementById('reportContent').innerHTML = reportHTML;
             document.getElementById('loading').classList.add('d-none');
             document.getElementById('results').classList.remove('d-none');
 
-            // Update map with soil units (overlay)
+            // Add soil visualization to map
             this.visualizeSoilUnits(this.analysisResults);
 
+            btn.disabled = false;
+
         } catch (error) {
-            document.getElementById('loadingText').textContent = `Error: ${error.message}`;
-            console.error(error);
+            this.updateLoading(`Error: ${error.message}`);
+            console.error('Analysis error:', error);
             setTimeout(() => {
                 document.getElementById('loading').classList.add('d-none');
                 btn.disabled = false;
-            }, 2000);
+            }, 3000);
         }
     },
 
+    updateLoading(text) {
+        document.getElementById('loadingText').textContent = text;
+    },
+
     visualizeSoilUnits(results) {
-        // Optional: add soil unit visualization to map
-        // For now, keep it simple with just the field boundary
+        if (this.soilLayer) {
+            this.map.removeLayer(this.soilLayer);
+        }
+
+        const ipColors = (ip) => {
+            if (ip == null || ip <= 0) return '#999';
+            if (ip >= 65) return '#2d6a4f';
+            if (ip >= 50) return '#52b788';
+            if (ip >= 35) return '#ffd166';
+            return '#ef476f';
+        };
+
+        this.soilLayer = L.geoJSON({
+            type: 'FeatureCollection',
+            features: results.soilUnits.filter(u => u.geometry).map(u => ({
+                type: 'Feature',
+                geometry: u.geometry.geometry || u.geometry,
+                properties: { ip: u.ip, unit: u.textUserId }
+            }))
+        }, {
+            style: (feature) => ({
+                fillColor: ipColors(feature.properties.ip),
+                weight: 1,
+                opacity: 0.6,
+                color: '#333',
+                fillOpacity: 0.4
+            }),
+            onEachFeature: (feature, layer) => {
+                const p = feature.properties;
+                layer.bindPopup(`<b>${p.unit}</b><br>IP: ${p.ip || 'S/D'}`);
+            }
+        }).addTo(this.map);
     },
 
     exportPDF() {
         const element = document.getElementById('reportContent');
-        const opt = {
-            margin: 10,
-            filename: `informe-suelo-${new Date().toISOString().slice(0, 10)}.pdf`,
-            image: { type: 'jpeg', quality: 0.98 },
-            html2canvas: { scale: 2 },
-            jsPDF: { orientation: 'portrait', unit: 'mm', format: 'a4' }
-        };
 
-        html2pdf().set(opt).from(element).save();
+        html2canvas(element, { scale: 2, useCORS: true }).then(canvas => {
+            const { jsPDF } = window.jspdf;
+            const pdf = new jsPDF('p', 'mm', 'a4');
+
+            const imgWidth = 190;
+            const pageHeight = 277;
+            const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+            let heightLeft = imgHeight;
+            let position = 10;
+
+            pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 10, position, imgWidth, imgHeight);
+            heightLeft -= pageHeight;
+
+            while (heightLeft > 0) {
+                position = heightLeft - imgHeight + 10;
+                pdf.addPage();
+                pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 10, position, imgWidth, imgHeight);
+                heightLeft -= pageHeight;
+            }
+
+            const name = document.getElementById('fieldName').value || 'campo';
+            pdf.save(`informe-suelo-${name}-${new Date().toISOString().slice(0, 10)}.pdf`);
+        });
     }
 };
 
-// Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', () => App.init());

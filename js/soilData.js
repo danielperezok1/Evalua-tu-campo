@@ -1,66 +1,68 @@
 /**
  * soilData.js - Load IDECOR soil data
+ * Tries: 1) local data/sheets/ 2) IDECOR direct fetch
  */
 const SoilData = {
 
-    // Cache for loaded sheets
     cache: {},
+    _indexPromise: null,
 
-    /**
-     * Load soil data for sheets that intersect with field boundary
-     * @param {Object} fieldBbox - {minLon, minLat, maxLon, maxLat}
-     * @returns {Promise<GeoJSON>} Combined FeatureCollection of intersecting soil units
-     */
     async loadForBoundingBox(fieldBbox) {
+        // fieldBbox is [minLon, minLat, maxLon, maxLat]
         const sheetsIndex = await this.getIndex();
 
-        // Find sheets that intersect
-        const intersectingSheets = sheetsIndex.filter(sheet =>
-            this.bboxIntersect(fieldBbox, sheet.bbox)
+        const intersecting = sheetsIndex.filter(sheet =>
+            sheet.bbox && this.bboxIntersect(fieldBbox, sheet.bbox)
         );
 
-        if (intersectingSheets.length === 0) {
-            throw new Error('El campo no se encuentra en el área relevada por IDECOR Córdoba.');
+        console.log(`Campo bbox: [${fieldBbox}]`);
+        console.log(`Hojas que intersectan: ${intersecting.map(s => s.name).join(', ') || 'ninguna'}`);
+
+        if (intersecting.length === 0) {
+            throw new Error(
+                'El campo no se encuentra en el área relevada por IDECOR Córdoba. ' +
+                'Verificá que el campo esté dentro de la provincia de Córdoba.'
+            );
         }
 
-        // Load and combine all sheets
         const allFeatures = [];
-        for (const sheet of intersectingSheets) {
+        const errors = [];
+
+        for (const sheet of intersecting) {
             try {
                 const geojson = await this.loadSheet(sheet);
                 if (geojson && geojson.features) {
                     allFeatures.push(...geojson.features);
+                    console.log(`✓ ${sheet.name}: ${geojson.features.length} features`);
                 }
             } catch (e) {
-                console.warn(`No se pudo cargar la hoja ${sheet.name}:`, e);
+                errors.push(sheet.name);
+                console.warn(`✗ ${sheet.name}:`, e.message);
             }
         }
 
         if (allFeatures.length === 0) {
-            throw new Error('No se encontraron datos de suelo. Verificá la conexión.');
+            throw new Error(
+                `No se pudieron cargar datos de suelo (hojas: ${errors.join(', ')}). ` +
+                'Puede ser un problema de conexión o CORS.'
+            );
         }
 
-        return {
-            type: 'FeatureCollection',
-            features: allFeatures
-        };
+        return { type: 'FeatureCollection', features: allFeatures };
     },
 
-    /**
-     * Get or load the sheets index
-     */
     async getIndex() {
-        if (this._indexPromise) {
-            return this._indexPromise;
-        }
+        if (this._indexPromise) return this._indexPromise;
 
         this._indexPromise = (async () => {
             try {
                 const response = await fetch('data/sheets-index.json');
-                if (!response.ok) throw new Error('No se encontró sheets-index.json');
-                return await response.json();
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const data = await response.json();
+                console.log(`Índice cargado: ${data.length} hojas`);
+                return data;
             } catch (e) {
-                console.error('Error cargando índice:', e);
+                console.warn('Usando índice por defecto:', e.message);
                 return this.getDefaultIndex();
             }
         })();
@@ -68,113 +70,100 @@ const SoilData = {
         return this._indexPromise;
     },
 
-    /**
-     * Load a single sheet's GeoJSON
-     */
     async loadSheet(sheet) {
-        if (this.cache[sheet.name]) {
-            return this.cache[sheet.name];
-        }
+        if (this.cache[sheet.name]) return this.cache[sheet.name];
 
+        // Strategy 1: Try local pre-downloaded JSON
         try {
-            // Try to load from local data/sheets/ folder first
-            const localPath = `data/sheets/${sheet.filename || sheet.name}.json`;
+            const localPath = `data/sheets/${sheet.name}.json`;
             const response = await fetch(localPath);
             if (response.ok) {
-                const data = await response.json();
+                const text = await response.text();
+                const data = text.trimStart().startsWith('var ')
+                    ? this.parseJSToJSON(text)
+                    : JSON.parse(text);
+                if (data) {
+                    this.cache[sheet.name] = data;
+                    return data;
+                }
+            }
+        } catch (e) { /* fall through */ }
+
+        // Strategy 2: Fetch directly from IDECOR
+        try {
+            const url = `https://suelos.cba.gov.ar/${sheet.name}/${sheet.layerFile}`;
+            const response = await fetch(url, { mode: 'cors' });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const text = await response.text();
+            const data = this.parseJSToJSON(text);
+            if (data) {
                 this.cache[sheet.name] = data;
                 return data;
             }
         } catch (e) {
-            // Fall through to remote
+            console.warn(`CORS/fetch falló para ${sheet.name}, intentando no-cors...`);
         }
 
+        // Strategy 3: Try with a CORS proxy
         try {
-            // Try to fetch from IDECOR directly
-            const url = `https://suelos.cba.gov.ar/${sheet.name}/layers/${sheet.layerFile}`;
-            const response = await fetch(url);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
+            const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(
+                `https://suelos.cba.gov.ar/${sheet.name}/${sheet.layerFile}`
+            )}`;
+            const response = await fetch(proxyUrl);
+            if (!response.ok) throw new Error(`Proxy HTTP ${response.status}`);
             const text = await response.text();
-
-            // Extract JSON from JavaScript file (e.g., var json_Hoja = {...})
-            const geojson = this.parseJSToJSON(text);
-            this.cache[sheet.name] = geojson;
-            return geojson;
+            const data = this.parseJSToJSON(text);
+            if (data) {
+                this.cache[sheet.name] = data;
+                return data;
+            }
         } catch (e) {
-            console.error(`Error cargando ${sheet.name}:`, e);
-            return null;
+            throw new Error(`No se pudo cargar ${sheet.name}: ${e.message}`);
         }
+
+        return null;
     },
 
-    /**
-     * Parse JavaScript variable assignment to JSON
-     * e.g.: "var json_Hoja = { ... }" -> { ... }
-     */
     parseJSToJSON(jsText) {
         try {
-            // Match var name = {...} or var name = [...]
-            const match = jsText.match(/var\s+\w+\s*=\s*(\{[\s\S]*\}|\[[\s\S]*\])\s*;?/);
-            if (!match) {
-                throw new Error('Could not parse JS structure');
-            }
-            const jsonStr = match[1];
-            return JSON.parse(jsonStr);
+            // Remove "var json_Hoja =" prefix
+            const cleaned = jsText.replace(/^\s*var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '');
+            return JSON.parse(cleaned);
         } catch (e) {
-            console.error('Error parsing JS to JSON:', e);
+            // Try regex approach for more complex cases
+            try {
+                const match = jsText.match(/=\s*(\{[\s\S]*\})\s*;?\s*$/);
+                if (match) return JSON.parse(match[1]);
+            } catch (e2) { /* ignore */ }
+            console.error('Error parsing JS to JSON:', e.message);
             return null;
         }
     },
 
-    /**
-     * Check if two bounding boxes intersect
-     */
-    bboxIntersect(bbox1, bbox2) {
-        return !(bbox1[2] < bbox2[0] || bbox1[0] > bbox2[2] ||
-                 bbox1[3] < bbox2[1] || bbox1[1] > bbox2[3]);
+    bboxIntersect(a, b) {
+        // Both are [minLon, minLat, maxLon, maxLat]
+        return !(a[2] < b[0] || a[0] > b[2] || a[3] < b[1] || a[1] > b[3]);
     },
 
-    /**
-     * Default index for MVP - can be expanded
-     * bbox: [minLon, minLat, maxLon, maxLat]
-     */
     getDefaultIndex() {
+        // Fallback with approximate bboxes for key sheets
         return [
-            {
-                name: 'JOVITA',
-                code: '3563-8-9-10',
-                bbox: [-62.32, -32.82, -61.98, -32.48],
-                layerFile: 'Jovita-3563-8-9-10-EPSG4326.js',
-                filename: 'Jovita'
-            },
-            {
-                name: 'LABOULAYE',
-                code: '3461-3462',
-                bbox: [-63.92, -34.32, -63.28, -33.68],
-                layerFile: 'Laboulaye-3461-3462-EPSG4326.js',
-                filename: 'Laboulaye'
-            },
-            {
-                name: 'RIOCUARTO',
-                code: '3360-3361',
-                bbox: [-64.32, -33.72, -63.68, -33.08],
-                layerFile: 'RioCuarto-3360-3361-EPSG4326.js',
-                filename: 'RioCuarto'
-            },
-            {
-                name: 'ONCATIVO',
-                code: '3362-3362',
-                bbox: [-64.02, -33.42, -63.38, -32.78],
-                layerFile: 'Oncativo-3362-3362-EPSG4326.js',
-                filename: 'Oncativo'
-            },
-            {
-                name: 'BALNEARIA',
-                code: '3462-3462',
-                bbox: [-63.58, -33.58, -62.94, -32.94],
-                layerFile: 'Balnearia-3462-3462-EPSG4326.js',
-                filename: 'Balnearia'
-            }
+            { name: "VIAMONTE", layerFile: "layers/Viamonte-3363-EPSG4326.js", bbox: [-62.5, -33.9, -62.0, -33.4], filename: "VIAMONTE" },
+            { name: "BELLVILLE", layerFile: "layers/BellVille-3363-10-EPSG4326.js", bbox: [-62.9, -33.2, -62.3, -32.7], filename: "BELLVILLE" },
+            { name: "MARCOSJUAREZ", layerFile: "layers/MarcosJuarez-3363-17-EPSG4326.js", bbox: [-62.5, -33.0, -61.9, -32.5], filename: "MARCOSJUAREZ" },
+            { name: "VILLAMARIA", layerFile: "layers/VillaMaria-3363-9-EPSG4326.js", bbox: [-63.5, -32.7, -63.0, -32.2], filename: "VILLAMARIA" },
+            { name: "ONCATIVO", layerFile: "layers/Oncativo-3163-32-EPSG4326.js", bbox: [-63.7, -32.2, -63.2, -31.7], filename: "ONCATIVO" },
+            { name: "RIOCUARTO", layerFile: "layers/RioCuarto-3363-19-EPSG4326.js", bbox: [-64.7, -33.4, -64.1, -32.9], filename: "RIOCUARTO" },
+            { name: "LABOULAYE", layerFile: "layers/Laboulaye-3563-3-EPSG4326.js", bbox: [-63.7, -34.4, -63.1, -33.9], filename: "LABOULAYE" },
+            { name: "JOVITA", layerFile: "layers/Jovita-3563-8-9-10-EPSG4326.js", bbox: [-64.0, -34.3, -63.3, -33.7], filename: "JOVITA" },
+            { name: "CANALS", layerFile: "layers/Canals-3363-28-EPSG4326.js", bbox: [-62.7, -33.8, -62.1, -33.3], filename: "CANALS" },
+            { name: "CORRALDEBUSTOS", layerFile: "layers/CorralDeBustos-3363-23-EPSG4326.js", bbox: [-62.4, -33.6, -61.8, -33.1], filename: "CORRALDEBUSTOS" },
+            { name: "LACARLOTA", layerFile: "layers/LaCarlota-3363-27-EPSG4326.js", bbox: [-63.6, -33.8, -63.0, -33.3], filename: "LACARLOTA" },
+            { name: "UCACHA", layerFile: "layers/Ucacha-3363-20-EPSG4326.js", bbox: [-63.7, -33.3, -63.1, -32.8], filename: "UCACHA" },
+            { name: "HERNANDO", layerFile: "layers/Hernando-3363-8-EPSG4326.js", bbox: [-63.8, -32.6, -63.2, -32.1], filename: "HERNANDO" },
+            { name: "LABORDE", layerFile: "layers/Laborde-3363-22-EPSG4326.js", bbox: [-62.9, -33.4, -62.3, -32.9], filename: "LABORDE" },
+            { name: "POSSE", layerFile: "layers/JustinianoPosse-3363-16-EPSG4326.js", bbox: [-62.6, -33.2, -62.0, -32.7], filename: "POSSE" },
+            { name: "PASCANAS", layerFile: "layers/Pascanas-3363-21-EPSG4326.js", bbox: [-63.1, -33.5, -62.5, -33.0], filename: "PASCANAS" }
         ];
     }
 };
