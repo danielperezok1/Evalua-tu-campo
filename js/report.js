@@ -21,8 +21,7 @@ const Report = {
         html += `<p class="text-muted mb-0">Informe para <strong>${typeLabels[reportType]}</strong> &middot; ${new Date().toLocaleDateString('es-AR')}</p>`;
         html += `</div>`;
         html += `<div class="text-end small text-muted">`;
-        html += `<div><strong>Autor:</strong> Daniel Perez</div>`;
-        html += `<div><i class="bi bi-twitter-x"></i> @daniel_pperez</div>`;
+        html += `<div><i class="bi bi-twitter-x"></i> <a href="https://x.com/daniel_pperez" target="_blank">@daniel_pperez</a></div>`;
         html += `</div>`;
         html += `</div>`;
 
@@ -97,8 +96,8 @@ const Report = {
         html += `
             <div class="text-center mt-3 pt-3 border-top">
                 <small class="text-muted">
-                    <strong>Evalua tu Campo</strong> &middot; Autor: <strong>Daniel Perez</strong>
-                    &middot; <i class="bi bi-twitter-x"></i> <a href="https://x.com/daniel_pperez" target="_blank">@daniel_pperez</a>
+                    <strong>Evalua tu Campo</strong> &middot;
+                    <i class="bi bi-twitter-x"></i> <a href="https://x.com/daniel_pperez" target="_blank">@daniel_pperez</a>
                 </small>
             </div>
         `;
