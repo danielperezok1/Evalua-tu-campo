@@ -53,11 +53,7 @@ const Report = {
         html += '<h5 class="mt-4"><i class="bi bi-table me-1"></i> Unidades de Suelo</h5>';
         html += this.soilTable(results.grouped, detailLevel);
 
-        // Series detail (for compra and detallado)
-        if ((reportType === 'compra' || detailLevel === 'detallado') && results.grouped.some(g => g.series.length > 0)) {
-            html += '<h5 class="mt-4"><i class="bi bi-list-nested me-1"></i> Detalle de Series</h5>';
-            html += this.seriesDetail(results.grouped);
-        }
+        // Series info is already in the soil units table (Composicion column)
 
         // Report-type specific sections
         if (reportType === 'alquiler') {
@@ -214,16 +210,18 @@ const Report = {
         // Monthly NDVI profile (bar chart)
         if (ndvi.monthlyProfile) {
             html += '<div class="mb-2"><strong class="small">Perfil mensual de NDVI</strong></div>';
-            html += '<div class="d-flex align-items-end justify-content-between" style="height:80px;">';
             const maxNDVI = Math.max(...ndvi.monthlyProfile.filter(m => m.ndvi).map(m => m.ndvi), 0.1);
+            const ndviBarMax = 60;
+            html += '<div style="display:flex;align-items:flex-end;gap:1px;height:90px;">';
             for (const m of ndvi.monthlyProfile) {
                 const val = m.ndvi || 0;
-                const pct = (val / maxNDVI) * 100;
+                const barH = Math.max(2, Math.round((val / maxNDVI) * ndviBarMax));
                 const color = val >= 0.5 ? '#2d6a4f' : val >= 0.3 ? '#52b788' : '#b7e4c7';
-                html += `<div class="text-center" style="flex:1;">
-                    <div style="background:${color};height:${pct}%;min-height:2px;border-radius:3px 3px 0 0;margin:0 1px;"
+                html += `<div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;">
+                    <div style="font-size:0.55rem;color:#555;margin-bottom:1px;">${val.toFixed(2)}</div>
+                    <div style="background:${color};width:75%;height:${barH}px;border-radius:3px 3px 0 0;"
                          title="${m.month}: ${val}"></div>
-                    <small class="d-block text-muted" style="font-size:0.6rem;">${m.month}</small>
+                    <small style="font-size:0.55rem;color:#888;margin-top:1px;">${m.month}</small>
                 </div>`;
             }
             html += '</div>';
@@ -474,17 +472,19 @@ const Report = {
 
         html += '</tbody></table></div>';
 
-        // Rainfall bar chart (simple CSS bars)
+        // Rainfall bar chart (pixel heights for reliable rendering)
         html += '<div class="mb-3"><strong>Distribucion de lluvias mensuales</strong></div>';
-        html += '<div class="d-flex align-items-end justify-content-between" style="height:120px;">';
         const maxPrecip = Math.max(...climate.monthlyData.map(m => m.precip));
+        const maxBarH = 100;
+        html += '<div style="display:flex;align-items:flex-end;gap:2px;height:130px;">';
         for (const m of climate.monthlyData) {
-            const pct = maxPrecip > 0 ? (m.precip / maxPrecip) * 100 : 0;
+            const barH = maxPrecip > 0 ? Math.max(2, Math.round((m.precip / maxPrecip) * maxBarH)) : 2;
             const color = m.precip > 100 ? '#2d6a4f' : m.precip > 50 ? '#52b788' : '#b7e4c7';
-            html += `<div class="text-center" style="flex:1;">
-                <div style="background:${color};height:${pct}%;min-height:2px;border-radius:3px 3px 0 0;margin:0 2px;"
+            html += `<div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;">
+                <div style="font-size:0.6rem;color:#555;margin-bottom:2px;">${Math.round(m.precip)}</div>
+                <div style="background:${color};width:70%;height:${barH}px;border-radius:3px 3px 0 0;"
                      title="${Math.round(m.precip)} mm"></div>
-                <small class="d-block text-muted" style="font-size:0.65rem;">${m.month}</small>
+                <small style="font-size:0.65rem;color:#888;margin-top:2px;">${m.month}</small>
             </div>`;
         }
         html += '</div>';

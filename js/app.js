@@ -205,12 +205,17 @@ const App = {
                 }
             }
 
-            // Step 7: NDVI chart (if data available)
-            if (satelliteData && satelliteData.ndvi && climateData) {
+            // Step 7: NDVI chart or productivity chart
+            if (satelliteData && climateData) {
                 try {
-                    mapImages.ndviChart = MapRenderer.renderNDVIChart(satelliteData.ndvi, climateData);
+                    if (satelliteData.ndvi) {
+                        mapImages.ndviChart = MapRenderer.renderNDVIChart(satelliteData.ndvi, climateData);
+                    } else if (satelliteData.productivity) {
+                        // Fallback: render productivity chart when NDVI unavailable
+                        mapImages.ndviChart = MapRenderer.renderProductivityChart(satelliteData.productivity, climateData);
+                    }
                 } catch (e) {
-                    console.warn('No se pudo generar grafico NDVI:', e.message);
+                    console.warn('No se pudo generar grafico:', e.message);
                 }
             }
 
@@ -293,6 +298,10 @@ const App = {
         btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Generando PDF...';
         btn.disabled = true;
 
+        // Step 1: Collect DOM break points BEFORE html2canvas
+        const elementRect = element.getBoundingClientRect();
+        const domBreakPoints = this.collectDOMBreakPoints(element, elementRect.top);
+
         html2canvas(element, {
             scale: 2,
             useCORS: true,
@@ -306,15 +315,20 @@ const App = {
             const pageHeight = 277;
             const margin = 10;
 
-            // Find safe cut points by scanning canvas pixels for white/empty rows
-            const cutPoints = this.findSafeCutPoints(canvas, pageHeight, imgWidth);
+            // Map DOM positions to canvas positions
+            const domHeight = elementRect.height;
+            const scaleY = canvas.height / domHeight;
+            const canvasBreaks = domBreakPoints.map(bp => Math.round(bp * scaleY));
+
+            // Build page slices using DOM break points
+            const slices = this.buildPageSlices(canvas, canvasBreaks, pageHeight, imgWidth);
 
             let pageNum = 0;
-            for (let i = 0; i < cutPoints.length; i++) {
+            for (let i = 0; i < slices.length; i++) {
                 if (pageNum > 0) pdf.addPage();
 
-                const srcY = cutPoints[i].srcY;
-                const srcH = cutPoints[i].srcH;
+                const srcY = slices[i].srcY;
+                const srcH = slices[i].srcH;
 
                 // Create slice canvas
                 const sliceCanvas = document.createElement('canvas');
@@ -343,71 +357,67 @@ const App = {
     },
 
     /**
-     * Scan canvas pixels to find safe horizontal cut points (white/empty rows)
-     * Returns array of {srcY, srcH} slices
+     * Collect top positions of block elements that are safe page break candidates.
+     * Returns array of Y offsets relative to the container top.
      */
-    findSafeCutPoints(canvas, pageHeightMm, imgWidthMm) {
-        const ctx = canvas.getContext('2d');
+    collectDOMBreakPoints(container, containerTop) {
+        const breakPoints = [0]; // always start at 0
+        // Select elements that represent section boundaries
+        const selectors = 'h5, .row.g-2, .row.g-3, .table-responsive, .p-3, .observation-item, .alert, .mb-3, .border.rounded, hr, .mt-4, .mt-3';
+        const elements = container.querySelectorAll(selectors);
+        for (const el of elements) {
+            const rect = el.getBoundingClientRect();
+            const relTop = rect.top - containerTop;
+            if (relTop > 10) {
+                breakPoints.push(Math.round(relTop));
+            }
+        }
+        // Deduplicate and sort
+        return [...new Set(breakPoints)].sort((a, b) => a - b);
+    },
+
+    /**
+     * Build page slices using DOM-derived break points.
+     * Chooses the last break point that fits within each page.
+     */
+    buildPageSlices(canvas, breakPoints, pageHeightMm, imgWidthMm) {
         const canvasToMm = imgWidthMm / canvas.width;
         const pageHeightPx = Math.round(pageHeightMm / canvasToMm);
         const slices = [];
-
         let currentY = 0;
 
         while (currentY < canvas.height) {
             const remaining = canvas.height - currentY;
 
-            // If remaining fits in one page, take it all
-            if (remaining <= pageHeightPx) {
+            if (remaining <= pageHeightPx * 1.05) {
+                // Remaining content fits (with 5% tolerance)
                 slices.push({ srcY: currentY, srcH: remaining });
                 break;
             }
 
-            // Target cut at full page height
-            const targetCut = currentY + pageHeightPx;
+            const maxCut = currentY + pageHeightPx;
 
-            // Search backwards from target for a "safe" row (mostly white/light)
-            // Search in the last 25% of the page
-            const searchStart = Math.max(currentY + pageHeightPx * 0.7, currentY + 100);
-            let bestCutY = targetCut;
-            let bestScore = -1;
-
-            // Sample every 4 pixels for speed
-            for (let y = targetCut; y >= searchStart; y -= 4) {
-                if (y >= canvas.height) continue;
-                // Sample a horizontal strip (3 rows for stability)
-                const stripH = Math.min(3, canvas.height - y);
-                const rowData = ctx.getImageData(0, y, canvas.width, stripH);
-                const pixels = rowData.data;
-
-                let lightCount = 0;
-                const totalPixels = (canvas.width * stripH);
-                for (let i = 0; i < pixels.length; i += 16) { // sample every 4th pixel
-                    const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
-                    const brightness = (r + g + b) / 3;
-                    if (brightness > 235) lightCount++;
+            // Find the last break point that is before maxCut
+            // but at least 40% into the page (avoid tiny slices)
+            const minCut = currentY + pageHeightPx * 0.4;
+            let bestBreak = null;
+            for (let i = breakPoints.length - 1; i >= 0; i--) {
+                const bp = breakPoints[i];
+                if (bp > currentY + 20 && bp <= maxCut && bp >= minCut) {
+                    bestBreak = bp;
+                    break;
                 }
-                const score = lightCount / (totalPixels / 4);
-
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestCutY = y;
-                }
-                // If we found a nearly all-white row, use it
-                if (score > 0.92) break;
             }
 
-            const sliceH = bestCutY - currentY;
-            if (sliceH < pageHeightPx * 0.3) {
-                // Safety: don't make slices too small
+            if (bestBreak !== null) {
+                slices.push({ srcY: currentY, srcH: bestBreak - currentY });
+                currentY = bestBreak;
+            } else {
+                // No DOM break found, fall back to page height
                 slices.push({ srcY: currentY, srcH: pageHeightPx });
                 currentY += pageHeightPx;
-            } else {
-                slices.push({ srcY: currentY, srcH: sliceH });
-                currentY += sliceH;
             }
 
-            // Safety: max 25 pages
             if (slices.length >= 25) {
                 if (currentY < canvas.height) {
                     slices.push({ srcY: currentY, srcH: canvas.height - currentY });

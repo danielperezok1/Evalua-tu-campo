@@ -30,8 +30,22 @@ const MapRenderer = {
         // Available S2 cloudless years from EOX (2018-2023) + Esri fallback
         const eoxYears = [2018, 2019, 2020, 2021, 2022, 2023];
 
-        const wetYear = this.findClosestYear(wettestYear, eoxYears);
-        const dryYear = this.findClosestYear(driestYear, eoxYears);
+        // Find closest EOX years, ensuring they are DIFFERENT
+        let wetYear = this.findClosestYear(wettestYear, eoxYears);
+        let dryYear = this.findClosestYear(driestYear, eoxYears);
+
+        if (wetYear === dryYear) {
+            // Pick distinct years: wet = closest to wettest, dry = next closest to driest
+            const sortedByWet = [...eoxYears].sort((a, b) => Math.abs(a - wettestYear) - Math.abs(b - wettestYear));
+            const sortedByDry = [...eoxYears].sort((a, b) => Math.abs(a - driestYear) - Math.abs(b - driestYear));
+            wetYear = sortedByWet[0];
+            dryYear = sortedByDry.find(y => y !== wetYear) || sortedByDry[1] || sortedByDry[0];
+            // If still same (edge case), pick extremes
+            if (wetYear === dryYear) {
+                wetYear = eoxYears[eoxYears.length - 1];
+                dryYear = eoxYears[0];
+            }
+        }
 
         // Esri satellite (current) as primary - always works with CORS
         const esriTile = (z, y, x) =>
@@ -45,7 +59,7 @@ const MapRenderer = {
         try {
             results.wetImage = await this.renderSatelliteView(
                 fieldGeoJSON, eoxTile(wetYear),
-                `Imagen Satelital - Ano Lluvioso (${wetYear})`
+                `Imagen Satelital - Ano Lluvioso (${wettestYear}, composito ${wetYear})`
             );
             results.wetYear = wetYear;
         } catch (e) {
@@ -63,11 +77,18 @@ const MapRenderer = {
         try {
             results.dryImage = await this.renderSatelliteView(
                 fieldGeoJSON, eoxTile(dryYear),
-                `Imagen Satelital - Ano Seco (${dryYear})`
+                `Imagen Satelital - Ano Seco (${driestYear}, composito ${dryYear})`
             );
             results.dryYear = dryYear;
         } catch (e) {
-            console.warn('EOX dry year failed:', e.message);
+            console.warn('EOX dry year failed, using Esri:', e.message);
+            try {
+                results.dryImage = await this.renderSatelliteView(
+                    fieldGeoJSON, esriTile,
+                    `Imagen Satelital - Ano Seco (referencia)`
+                );
+                results.dryYear = 'ref';
+            } catch (e2) { console.warn('Dry satellite capture failed:', e2.message); }
         }
 
         return results;
@@ -391,6 +412,133 @@ const MapRenderer = {
         ctx.setLineDash([]);
         ctx.fillStyle = '#555';
         ctx.fillText('Promedio NDVI', legX + 153, legY);
+
+        return canvas.toDataURL('image/png');
+    },
+
+    /**
+     * Render productivity chart as fallback when NDVI data unavailable
+     */
+    renderProductivityChart(prodData, precipData) {
+        const W = this.CANVAS_WIDTH, H = 380;
+        const canvas = document.createElement('canvas');
+        canvas.width = W;
+        canvas.height = H;
+        const ctx = canvas.getContext('2d');
+
+        ctx.fillStyle = '#fafafa';
+        ctx.fillRect(0, 0, W, H);
+
+        if (!prodData || !prodData.yearlyProductivity || prodData.yearlyProductivity.length === 0) {
+            ctx.fillStyle = '#999'; ctx.font = '14px Arial'; ctx.textAlign = 'center';
+            ctx.fillText('Datos de productividad no disponibles', W / 2, H / 2);
+            return canvas.toDataURL('image/png');
+        }
+
+        const years = prodData.yearlyProductivity;
+        const margin = { top: 50, right: 60, bottom: 55, left: 55 };
+        const chartW = W - margin.left - margin.right;
+        const chartH = H - margin.top - margin.bottom;
+
+        const yMin = 0, yMax = 100;
+        const toX = (i) => margin.left + (i + 0.5) / years.length * chartW;
+        const toY = (v) => margin.top + (1 - (v - yMin) / (yMax - yMin)) * chartH;
+
+        // Grid
+        ctx.strokeStyle = '#e0e0e0'; ctx.lineWidth = 0.5;
+        for (let v = 0; v <= 100; v += 20) {
+            const y = toY(v);
+            ctx.beginPath(); ctx.moveTo(margin.left, y); ctx.lineTo(W - margin.right, y); ctx.stroke();
+        }
+
+        // Bars
+        const barW = Math.min(40, chartW / years.length * 0.7);
+        for (let i = 0; i < years.length; i++) {
+            const yr = years[i];
+            const x = toX(i) - barW / 2;
+            const y = toY(yr.productivityScore);
+            const h = toY(yMin) - y;
+
+            const grad = ctx.createLinearGradient(x, y, x, toY(yMin));
+            if (yr.category === 'Buena') { grad.addColorStop(0, '#2d6a4f'); grad.addColorStop(1, '#52b788'); }
+            else if (yr.category === 'Regular') { grad.addColorStop(0, '#e9c46a'); grad.addColorStop(1, '#f4e285'); }
+            else { grad.addColorStop(0, '#e76f51'); grad.addColorStop(1, '#f4a261'); }
+
+            ctx.fillStyle = grad;
+            ctx.fillRect(x, y, barW, h);
+            ctx.strokeStyle = 'rgba(0,0,0,0.15)'; ctx.lineWidth = 0.5;
+            ctx.strokeRect(x, y, barW, h);
+
+            ctx.fillStyle = '#333'; ctx.font = 'bold 11px Arial'; ctx.textAlign = 'center';
+            ctx.fillText(yr.productivityScore, toX(i), y - 6);
+
+            ctx.fillStyle = '#666'; ctx.font = '11px Arial';
+            ctx.fillText(yr.year, toX(i), toY(yMin) + 16);
+        }
+
+        // Average line
+        const avgY = toY(prodData.avgScore);
+        ctx.setLineDash([6, 4]); ctx.strokeStyle = '#e63946'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(margin.left, avgY); ctx.lineTo(W - margin.right, avgY); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#e63946'; ctx.font = 'bold 10px Arial'; ctx.textAlign = 'left';
+        ctx.fillText(`Prom: ${prodData.avgScore}`, W - margin.right + 5, avgY + 4);
+
+        // Precip overlay
+        if (precipData && precipData.yearlyData) {
+            const precips = precipData.yearlyData;
+            const maxP = Math.max(...precips.map(p => p.precip));
+            const minP = Math.min(...precips.map(p => p.precip));
+            const pToY = (v) => margin.top + (1 - (v - minP * 0.8) / (maxP * 1.1 - minP * 0.8)) * chartH;
+
+            ctx.strokeStyle = '#4895ef'; ctx.lineWidth = 2;
+            ctx.beginPath();
+            for (let i = 0; i < Math.min(precips.length, years.length); i++) {
+                const x = toX(i), y = pToY(precips[i].precip);
+                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            for (let i = 0; i < Math.min(precips.length, years.length); i++) {
+                const x = toX(i), y = pToY(precips[i].precip);
+                ctx.fillStyle = '#4895ef';
+                ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+                ctx.font = '9px Arial'; ctx.textAlign = 'center';
+                ctx.fillText(`${precips[i].precip}mm`, x, y - 10);
+            }
+
+            ctx.save(); ctx.fillStyle = '#4895ef'; ctx.font = '11px Arial';
+            ctx.translate(W - 10, margin.top + chartH / 2);
+            ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center';
+            ctx.fillText('Precipitacion (mm)', 0, 0); ctx.restore();
+        }
+
+        // Y axis
+        ctx.save(); ctx.fillStyle = '#2d6a4f'; ctx.font = '11px Arial';
+        ctx.translate(15, margin.top + chartH / 2);
+        ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center';
+        ctx.fillText('Productividad (IP x Lluvia)', 0, 0); ctx.restore();
+
+        ctx.fillStyle = '#888'; ctx.font = '10px Arial'; ctx.textAlign = 'right';
+        for (let v = 0; v <= 100; v += 20) ctx.fillText(v, margin.left - 8, toY(v) + 4);
+
+        // Title
+        ctx.fillStyle = '#1b4332'; ctx.font = 'bold 15px Arial'; ctx.textAlign = 'center';
+        ctx.fillText('Productividad Historica vs Precipitacion', W / 2, 20);
+        ctx.fillStyle = '#888'; ctx.font = '11px Arial';
+        ctx.fillText('Modelo: IP suelo x factor lluvia | Fuente precipitacion: Open-Meteo', W / 2, 36);
+
+        // Legend
+        const legX = margin.left + 10, legY = H - 18;
+        ctx.fillStyle = '#2d6a4f'; ctx.fillRect(legX, legY - 8, 12, 8);
+        ctx.fillStyle = '#555'; ctx.font = '10px Arial'; ctx.textAlign = 'left';
+        ctx.fillText('Productividad', legX + 16, legY);
+        ctx.strokeStyle = '#4895ef'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(legX + 95, legY - 4); ctx.lineTo(legX + 110, legY - 4); ctx.stroke();
+        ctx.fillStyle = '#555'; ctx.fillText('Lluvia', legX + 115, legY);
+        ctx.setLineDash([4, 3]); ctx.strokeStyle = '#e63946'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(legX + 155, legY - 4); ctx.lineTo(legX + 173, legY - 4); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#555'; ctx.fillText('Promedio', legX + 178, legY);
 
         return canvas.toDataURL('image/png');
     },
