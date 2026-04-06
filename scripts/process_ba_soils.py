@@ -25,10 +25,10 @@ import math
 SHP = r"C:\Users\daperez\Desktop\Evalua tu campo\1_Mapa_de_Suelos_BA_50000_V1\Suelos_BA_50mil_V1.shp"
 OUT_DIR = r"C:\Users\daperez\Desktop\Evalua tu campo\data\sheets-ba"
 INDEX_PATH = r"C:\Users\daperez\Desktop\Evalua tu campo\data\sheets-ba-index.json"
-# Tolerancia baja para preservar curvas organicas del shapefile 1:50000
-# 0.001 deg ~ 110m: elimina solo vertices redundantes, mantiene la forma
-SIMPLIFY_TOL = 0.001
-# Precision de coordenadas: 4 decimales = ~11m (suficiente para 1:50000)
+# Tolerancia muy baja para conservar curvas organicas del 1:50000
+# 0.0005 deg ~ 55m: preserva inflexiones naturales de limites de suelo
+SIMPLIFY_TOL = 0.0005
+# Precision de coordenadas: 4 decimales = ~11m
 COORD_PRECISION = 4
 
 
