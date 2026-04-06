@@ -30,6 +30,9 @@ Thumbs.db
 # Data (optional - for pre-downloaded sheets)
 # data/sheets/
 
+# Raw shapefiles (too large for git - use scripts/process_ba_soils.py to regenerate)
+1_Mapa_de_Suelos_BA_50000_V1/
+
 # Temp
 .tmp/
 dist/

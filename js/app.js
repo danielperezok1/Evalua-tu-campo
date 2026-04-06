@@ -157,12 +157,14 @@ const App = {
                 detailLevel: document.getElementById('detailLevel').value
             };
 
-            // Step 1: Load soil data (optional for Reclamo if outside IDECOR coverage)
+            // Step 1: Load soil data (tries IDECOR → BA fallback; optional for Reclamo if outside all coverage)
             this.updateLoading('Buscando hojas de suelo...');
             const bbox = turf.bbox(this.fieldGeoJSON);
             let soilData = null;
+            let soilSource = null;
             try {
                 soilData = await SoilData.loadForBoundingBox(bbox);
+                soilSource = soilData._source || 'IDECOR';
             } catch (e) {
                 if (options.reportType !== 'reclamo') throw e;
                 console.warn('Datos de suelo no disponibles (fuera de cobertura):', e.message);
@@ -173,6 +175,7 @@ const App = {
                 this.updateLoading('Analizando intersecciones espaciales...');
                 try {
                     this.analysisResults = Analysis.analyze(this.fieldGeoJSON, soilData);
+                    this.analysisResults._soilSource = soilSource;
                 } catch (e) {
                     if (options.reportType !== 'reclamo') throw e;
                     console.warn('Analisis espacial fallido:', e.message);
@@ -182,7 +185,7 @@ const App = {
                 this.analysisResults = null;
             }
 
-            // Fallback minimal results for Reclamo when outside IDECOR coverage
+            // Fallback minimal results for Reclamo when outside all coverage
             if (!this.analysisResults) {
                 if (options.reportType !== 'reclamo') throw new Error('No se encontraron datos de suelo para este campo.');
                 const areaHa = turf.area(this.fieldGeoJSON) / 10000;
@@ -192,9 +195,10 @@ const App = {
                     grouped: [],
                     soilUnits: [],
                     coveragePercent: 0,
+                    _soilSource: null,
                     observations: [{
                         type: 'warning',
-                        text: `Campo fuera de la cobertura IDECOR (Cordoba). Superficie estimada: ${areaHa.toFixed(1)} ha. El informe muestra solo el analisis climatico.`
+                        text: `Campo fuera de la cobertura de datos de suelo disponibles. Superficie estimada: ${areaHa.toFixed(1)} ha. El informe muestra solo el analisis climatico.`
                     }]
                 };
             }

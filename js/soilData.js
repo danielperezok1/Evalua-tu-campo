@@ -1,11 +1,12 @@
 /**
- * soilData.js - Load IDECOR soil data
- * Tries: 1) local data/sheets/ 2) IDECOR direct fetch
+ * soilData.js - Load IDECOR soil data with BA fallback
+ * Tries: 1) IDECOR local tiles  2) IDECOR direct fetch  3) BA 1:50.000 tiles
  */
 const SoilData = {
 
     cache: {},
     _indexPromise: null,
+    _baIndexPromise: null,
 
     async loadForBoundingBox(fieldBbox) {
         // fieldBbox is [minLon, minLat, maxLon, maxLat]
@@ -16,39 +17,104 @@ const SoilData = {
         );
 
         console.log(`Campo bbox: [${fieldBbox}]`);
-        console.log(`Hojas que intersectan: ${intersecting.map(s => s.name).join(', ') || 'ninguna'}`);
+        console.log(`Hojas IDECOR que intersectan: ${intersecting.map(s => s.name).join(', ') || 'ninguna'}`);
+
+        if (intersecting.length > 0) {
+            const allFeatures = [];
+            const errors = [];
+
+            for (const sheet of intersecting) {
+                try {
+                    const geojson = await this.loadSheet(sheet);
+                    if (geojson && geojson.features) {
+                        allFeatures.push(...geojson.features);
+                        console.log(`✓ ${sheet.name}: ${geojson.features.length} features`);
+                    }
+                } catch (e) {
+                    errors.push(sheet.name);
+                    console.warn(`✗ ${sheet.name}:`, e.message);
+                }
+            }
+
+            if (allFeatures.length > 0) {
+                const fc = { type: 'FeatureCollection', features: allFeatures };
+                fc._source = 'IDECOR';
+                return fc;
+            }
+        }
+
+        // Fallback: try Buenos Aires 1:50.000 tiles
+        console.log('Intentando datos de Buenos Aires 1:50.000...');
+        try {
+            const baResult = await this.loadForBoundingBoxBA(fieldBbox);
+            if (baResult && baResult.features && baResult.features.length > 0) {
+                baResult._source = 'BA_50mil';
+                return baResult;
+            }
+        } catch (e) {
+            console.warn('Sin cobertura BA tampoco:', e.message);
+        }
+
+        throw new Error(
+            'El campo no se encuentra en el área relevada. ' +
+            'Cobertura disponible: Córdoba (IDECOR) y Buenos Aires (INTA 1:50.000).'
+        );
+    },
+
+    async loadForBoundingBoxBA(fieldBbox) {
+        const baIndex = await this.getBAIndex();
+        const intersecting = baIndex.filter(tile =>
+            tile.bbox && this.bboxIntersect(fieldBbox, tile.bbox)
+        );
+
+        console.log(`Tiles BA que intersectan: ${intersecting.map(t => t.file).join(', ') || 'ninguno'}`);
 
         if (intersecting.length === 0) {
-            throw new Error(
-                'El campo no se encuentra en el área relevada por IDECOR Córdoba. ' +
-                'Verificá que el campo esté dentro de la provincia de Córdoba.'
-            );
+            throw new Error('Fuera de cobertura BA.');
         }
 
         const allFeatures = [];
-        const errors = [];
-
-        for (const sheet of intersecting) {
+        for (const tile of intersecting) {
             try {
-                const geojson = await this.loadSheet(sheet);
+                const key = 'ba_' + tile.file;
+                if (!this.cache[key]) {
+                    const response = await fetch(`data/sheets-ba/${tile.file}`);
+                    if (!response.ok) throw new Error('HTTP ' + response.status);
+                    const data = await response.json();
+                    this.cache[key] = data;
+                }
+                const geojson = this.cache[key];
                 if (geojson && geojson.features) {
                     allFeatures.push(...geojson.features);
-                    console.log(`✓ ${sheet.name}: ${geojson.features.length} features`);
+                    console.log(`✓ BA tile ${tile.file}: ${geojson.features.length} features`);
                 }
             } catch (e) {
-                errors.push(sheet.name);
-                console.warn(`✗ ${sheet.name}:`, e.message);
+                console.warn(`✗ BA tile ${tile.file}:`, e.message);
             }
         }
 
         if (allFeatures.length === 0) {
-            throw new Error(
-                `No se pudieron cargar datos de suelo (hojas: ${errors.join(', ')}). ` +
-                'Puede ser un problema de conexión o CORS.'
-            );
+            throw new Error('No se pudieron cargar tiles BA.');
         }
 
         return { type: 'FeatureCollection', features: allFeatures };
+    },
+
+    async getBAIndex() {
+        if (this._baIndexPromise) return this._baIndexPromise;
+        this._baIndexPromise = (async () => {
+            try {
+                const response = await fetch('data/sheets-ba-index.json');
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const data = await response.json();
+                console.log(`Índice BA cargado: ${data.length} tiles`);
+                return data;
+            } catch (e) {
+                console.warn('No se pudo cargar índice BA:', e.message);
+                return [];
+            }
+        })();
+        return this._baIndexPromise;
     },
 
     async getIndex() {

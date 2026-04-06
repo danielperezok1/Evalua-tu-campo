@@ -26,8 +26,10 @@ const Report = {
         html += `</div>`;
         html += `</div>`;
 
-        // Detectar si no hay datos de suelo (campo fuera de cobertura IDECOR)
+        // Detectar si no hay datos de suelo (campo fuera de toda cobertura)
         const noSoilData = reportType === 'reclamo' && (!results.grouped || results.grouped.length === 0);
+        const soilSource = results._soilSource || 'IDECOR';
+        const isBASoil = soilSource === 'BA_50mil';
 
         // Summary cards — sin suelo: solo superficie
         html += '<div class="row g-2 mb-3">';
@@ -49,12 +51,15 @@ const Report = {
             html += '</div>';
         }
 
-        // Mapas temáticos y tabla de suelos: omitir si no hay datos IDECOR
+        // Mapas temáticos y tabla de suelos: omitir si no hay datos de suelo
         if (!noSoilData) {
-            if (mapImages) {
+            if (mapImages && !isBASoil) {
                 html += this.mapsSection(mapImages);
             }
             html += '<h5 class="mt-4"><i class="bi bi-table me-1"></i> Unidades de Suelo</h5>';
+            if (isBASoil) {
+                html += `<div class="alert alert-info py-1 px-2 small mb-2"><i class="bi bi-info-circle me-1"></i> Fuente: Carta de Suelos Prov. Buenos Aires 1:50.000 (INTA). IP no relevado en esta fuente (S/D).</div>`;
+            }
             html += this.soilTable(results.grouped, detailLevel);
         }
 
@@ -98,11 +103,19 @@ const Report = {
         }
 
         // Disclaimer
+        let soilSourceNote = '';
+        if (!noSoilData) {
+            if (isBASoil) {
+                soilSourceNote = 'Suelos: Carta de Suelos de la Prov. de Buenos Aires 1:50.000 (INTA). IP no disponible en esta fuente.';
+            } else {
+                soilSourceNote = 'Suelos: <a href="https://suelos.cba.gov.ar" target="_blank">Cartas de Suelo IDECOR</a> (escala semi-detallada, orientativo).';
+            }
+        }
         html += `
             <div class="alert alert-secondary mt-4 small">
                 <i class="bi bi-shield-check me-1"></i>
                 <strong>Nota:</strong>
-                ${!noSoilData ? 'Suelos: <a href="https://suelos.cba.gov.ar" target="_blank">Cartas de Suelo IDECOR</a> (escala semi-detallada, orientativo).' : ''}
+                ${soilSourceNote}
                 ${climateData ? 'Clima: <a href="https://open-meteo.com" target="_blank">Open-Meteo</a> (datos historicos).' : ''}
                 ${satelliteData && satelliteData.ndvi && !noSoilData ? 'NDVI: MODIS MOD13Q1 (NASA/ORNL DAAC).' : ''}
                 No reemplaza un estudio de suelos a campo.
