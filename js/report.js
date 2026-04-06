@@ -698,12 +698,12 @@ const Report = {
         html += this.summaryCard('Amplitud term.', `${cc.avgThermalAmplitude}\u00B0C`, 'bi-arrows-expand');
         html += '</div>';
 
-        // --- Precipitation bar chart ---
-        html += '<div class="mb-1"><strong><i class="bi bi-bar-chart me-1"></i>Precipitaciones mensuales (mm)</strong></div>';
+        // --- Precipitation bar chart (simple campaign) ---
+        html += '<div class="mb-1"><strong><i class="bi bi-bar-chart me-1"></i>Precipitaciones mensuales de campana (mm)</strong></div>';
         const maxPr = Math.max(...cc.months.map(m => m.totalPrecip), 1);
-        html += '<div style="display:flex;align-items:flex-end;gap:2px;height:130px;">';
+        html += '<div style="display:flex;align-items:flex-end;gap:2px;height:120px;">';
         for (const m of cc.months) {
-            const barH = Math.max(2, Math.round((m.totalPrecip / maxPr) * 100));
+            const barH = Math.max(2, Math.round((m.totalPrecip / maxPr) * 90));
             const color = m.totalPrecip > 150 ? '#0077b6' : m.totalPrecip > 80 ? '#0096c7' : m.totalPrecip > 30 ? '#90e0ef' : '#caf0f8';
             html += `<div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;">
                 <div style="font-size:0.6rem;color:#555;margin-bottom:2px;">${m.totalPrecip}</div>
@@ -712,6 +712,44 @@ const Report = {
             </div>`;
         }
         html += '</div>';
+
+        // --- Comparison chart: historical avg vs campaign ---
+        if (climateData && climateData.monthlyData) {
+            html += '<div class="mt-3 mb-1"><strong><i class="bi bi-bar-chart-line me-1"></i>Lluvia: promedio historico vs campana</strong></div>';
+            html += '<p class="text-muted small mb-1">Gris = promedio historico &nbsp;&middot;&nbsp; Color = campana actual</p>';
+
+            const allVals = cc.months.flatMap(m => {
+                const mi = parseInt(m.key.split('-')[1]) - 1;
+                return [m.totalPrecip, Math.round(climateData.monthlyData[mi]?.precip || 0)];
+            });
+            const maxComp = Math.max(...allVals, 1);
+            const compBarMax = 90;
+
+            html += '<div style="display:flex;gap:3px;align-items:flex-end;height:120px;">';
+            for (const m of cc.months) {
+                const mi = parseInt(m.key.split('-')[1]) - 1;
+                const histPr = Math.round(climateData.monthlyData[mi]?.precip || 0);
+                const campPr = m.totalPrecip;
+                const histH = Math.max(2, Math.round((histPr / maxComp) * compBarMax));
+                const campH = Math.max(2, Math.round((campPr / maxComp) * compBarMax));
+                // Color campaign bar: red if <70% of hist, green if within range, blue if >130%
+                const campColor = campPr < histPr * 0.7 ? '#ef476f' : campPr > histPr * 1.3 ? '#0096c7' : '#52b788';
+                html += `<div style="flex:1;display:flex;flex-direction:column;align-items:center;">
+                    <div style="display:flex;gap:1px;align-items:flex-end;height:${compBarMax}px;">
+                        <div style="background:#adb5bd;width:45%;height:${histH}px;border-radius:2px 2px 0 0;" title="Hist: ${histPr} mm"></div>
+                        <div style="background:${campColor};width:45%;height:${campH}px;border-radius:2px 2px 0 0;" title="Campaña: ${campPr} mm"></div>
+                    </div>
+                    <small style="font-size:0.6rem;color:#888;margin-top:2px;">${m.label}</small>
+                </div>`;
+            }
+            html += '</div>';
+            html += '<div style="display:flex;gap:12px;margin-top:4px;" class="small text-muted">';
+            html += '<span><span style="display:inline-block;width:12px;height:10px;background:#adb5bd;border-radius:2px;vertical-align:middle;"></span> Historico</span>';
+            html += '<span><span style="display:inline-block;width:12px;height:10px;background:#52b788;border-radius:2px;vertical-align:middle;"></span> Campana (normal)</span>';
+            html += '<span><span style="display:inline-block;width:12px;height:10px;background:#ef476f;border-radius:2px;vertical-align:middle;"></span> Campana (deficit)</span>';
+            html += '<span><span style="display:inline-block;width:12px;height:10px;background:#0096c7;border-radius:2px;vertical-align:middle;"></span> Campana (exceso)</span>';
+            html += '</div>';
+        }
 
         // --- Temperature table ---
         html += '<div class="mt-3 mb-1"><strong><i class="bi bi-thermometer me-1"></i>Temperaturas mensuales (\u00B0C)</strong></div>';

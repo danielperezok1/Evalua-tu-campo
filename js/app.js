@@ -101,11 +101,13 @@ const App = {
         document.getElementById('exportPdf').addEventListener('click', () => this.exportPDF());
 
         // Show/hide campaign date section based on report type
-        document.querySelectorAll('input[name="reportType"]').forEach(radio => {
-            radio.addEventListener('change', () => {
-                const section = document.getElementById('campaignDatesSection');
-                section.classList.toggle('d-none', radio.value !== 'reclamo');
-            });
+        // Use click on labels (the visible elements in Bootstrap btn-check groups)
+        const toggleCampaignSection = () => {
+            const val = document.querySelector('input[name="reportType"]:checked')?.value;
+            document.getElementById('campaignDatesSection').classList.toggle('d-none', val !== 'reclamo');
+        };
+        document.querySelectorAll('label[for^="type"]').forEach(lbl => {
+            lbl.addEventListener('click', () => setTimeout(toggleCampaignSection, 0));
         });
     },
 
@@ -148,21 +150,54 @@ const App = {
         document.getElementById('loading').classList.remove('d-none');
 
         try {
-            // Step 1: Load soil data
-            this.updateLoading('Buscando hojas de suelo...');
-            const bbox = turf.bbox(this.fieldGeoJSON);
-            const soilData = await SoilData.loadForBoundingBox(bbox);
-
-            // Step 2: Spatial analysis
-            this.updateLoading('Analizando intersecciones espaciales...');
-            this.analysisResults = Analysis.analyze(this.fieldGeoJSON, soilData);
-
-            // Read options early (needed for campaign climate fetch)
+            // Read options first — needed throughout the flow
             const options = {
                 reportType: document.querySelector('input[name="reportType"]:checked').value,
                 fieldName: document.getElementById('fieldName').value,
                 detailLevel: document.getElementById('detailLevel').value
             };
+
+            // Step 1: Load soil data (optional for Reclamo if outside IDECOR coverage)
+            this.updateLoading('Buscando hojas de suelo...');
+            const bbox = turf.bbox(this.fieldGeoJSON);
+            let soilData = null;
+            try {
+                soilData = await SoilData.loadForBoundingBox(bbox);
+            } catch (e) {
+                if (options.reportType !== 'reclamo') throw e;
+                console.warn('Datos de suelo no disponibles (fuera de cobertura):', e.message);
+            }
+
+            // Step 2: Spatial analysis (optional for Reclamo)
+            if (soilData) {
+                this.updateLoading('Analizando intersecciones espaciales...');
+                try {
+                    this.analysisResults = Analysis.analyze(this.fieldGeoJSON, soilData);
+                } catch (e) {
+                    if (options.reportType !== 'reclamo') throw e;
+                    console.warn('Analisis espacial fallido:', e.message);
+                    this.analysisResults = null;
+                }
+            } else {
+                this.analysisResults = null;
+            }
+
+            // Fallback minimal results for Reclamo when outside IDECOR coverage
+            if (!this.analysisResults) {
+                if (options.reportType !== 'reclamo') throw new Error('No se encontraron datos de suelo para este campo.');
+                const areaHa = turf.area(this.fieldGeoJSON) / 10000;
+                this.analysisResults = {
+                    totalAreaHa: areaHa,
+                    weightedIP: null,
+                    grouped: [],
+                    soilUnits: [],
+                    coveragePercent: 0,
+                    observations: [{
+                        type: 'warning',
+                        text: `Campo fuera de la cobertura IDECOR (Cordoba). Superficie estimada: ${areaHa.toFixed(1)} ha. El informe muestra solo el analisis climatico.`
+                    }]
+                };
+            }
 
             // Step 3: Climate data
             this.updateLoading('Consultando datos climaticos...');
