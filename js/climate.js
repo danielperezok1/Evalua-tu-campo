@@ -132,6 +132,95 @@ const Climate = {
         };
     },
 
+    /**
+     * Fetch climate data for a specific campaign period (for Reclamo reports)
+     * @param {number} lat - Latitude
+     * @param {number} lon - Longitude
+     * @param {string} startDate - YYYY-MM-DD
+     * @param {string} endDate - YYYY-MM-DD
+     */
+    async fetchCampaign(lat, lon, startDate, endDate) {
+        const url = `https://archive-api.open-meteo.com/v1/archive?` +
+            `latitude=${lat}&longitude=${lon}` +
+            `&start_date=${startDate}&end_date=${endDate}` +
+            `&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,et0_fao_evapotranspiration` +
+            `&timezone=America/Argentina/Cordoba`;
+
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`Open-Meteo campana HTTP ${response.status}`);
+
+        const data = await response.json();
+        return this.processCampaignData(data, startDate, endDate);
+    },
+
+    processCampaignData(data, startDate, endDate) {
+        const daily = data.daily;
+        if (!daily || !daily.time) return null;
+
+        const n = daily.time.length;
+        const monthGroups = {};
+        let totalFrostDays = 0, totalHotDays = 0, totalHeavyRainDays = 0;
+
+        for (let i = 0; i < n; i++) {
+            const date = new Date(daily.time[i] + 'T12:00:00');
+            const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+
+            if (!monthGroups[monthKey]) {
+                monthGroups[monthKey] = {
+                    label: date.toLocaleDateString('es-AR', { month: 'short', year: '2-digit' }),
+                    tempMax: [], tempMin: [], precip: [], et0: []
+                };
+            }
+
+            const tmax = daily.temperature_2m_max[i];
+            const tmin = daily.temperature_2m_min[i];
+            const pr = daily.precipitation_sum[i];
+            const et = daily.et0_fao_evapotranspiration ? daily.et0_fao_evapotranspiration[i] : null;
+
+            if (tmax != null) { monthGroups[monthKey].tempMax.push(tmax); if (tmax > 35) totalHotDays++; }
+            if (tmin != null) { monthGroups[monthKey].tempMin.push(tmin); if (tmin < 0) totalFrostDays++; }
+            if (pr != null) { monthGroups[monthKey].precip.push(pr); if (pr > 40) totalHeavyRainDays++; }
+            if (et != null) monthGroups[monthKey].et0.push(et);
+        }
+
+        const months = Object.entries(monthGroups)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([key, m]) => {
+                const avgTempMax = this.avg(m.tempMax);
+                const avgTempMin = this.avg(m.tempMin);
+                const totalPrecip = Math.round(this.sum(m.precip));
+                const totalEt0 = Math.round(this.sum(m.et0));
+                return {
+                    key,
+                    label: m.label,
+                    tempMax: avgTempMax,
+                    tempMin: avgTempMin,
+                    thermalAmplitude: Math.round((avgTempMax - avgTempMin) * 10) / 10,
+                    totalPrecip,
+                    totalEt0,
+                    waterBalance: totalPrecip - totalEt0
+                };
+            });
+
+        const totalPrecip = months.reduce((s, m) => s + m.totalPrecip, 0);
+        const totalEt0 = months.reduce((s, m) => s + m.totalEt0, 0);
+
+        return {
+            startDate,
+            endDate,
+            months,
+            totalPrecip: Math.round(totalPrecip),
+            totalEt0: Math.round(totalEt0),
+            waterBalance: Math.round(totalPrecip - totalEt0),
+            avgTempMax: this.avg(months.map(m => m.tempMax)),
+            avgTempMin: this.avg(months.map(m => m.tempMin)),
+            avgThermalAmplitude: this.avg(months.map(m => m.thermalAmplitude)),
+            frostDays: totalFrostDays,
+            hotDays: totalHotDays,
+            heavyRainDays: totalHeavyRainDays
+        };
+    },
+
     avg(arr) {
         if (!arr.length) return 0;
         return Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 10) / 10;

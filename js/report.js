@@ -3,13 +3,14 @@
  */
 const Report = {
 
-    generate(results, options, climateData, mapImages, satelliteData) {
+    generate(results, options, climateData, mapImages, satelliteData, campaignClimate) {
         const { reportType, fieldName, detailLevel } = options;
 
         const typeLabels = {
             alquiler: 'Alquiler',
             compra: 'Compra',
-            manejo: 'Manejo'
+            manejo: 'Manejo',
+            reclamo: 'Reclamo'
         };
 
         let html = '';
@@ -61,11 +62,20 @@ const Report = {
             html += this.compraSection(results);
         } else if (reportType === 'manejo') {
             html += this.manejoSection(results);
+        } else if (reportType === 'reclamo') {
+            html += this.reclamoSection(results, campaignClimate, climateData);
         }
 
-        // Climate section
-        if (climateData) {
+        // Climate section (historical — always shown except for reclamo which has its own)
+        if (climateData && reportType !== 'reclamo') {
             html += this.climateSection(climateData, reportType);
+        }
+
+        // Campaign climate section (only for reclamo)
+        if (reportType === 'reclamo' && campaignClimate) {
+            html += this.campaignClimateSection(campaignClimate, climateData);
+        } else if (reportType === 'reclamo' && !campaignClimate) {
+            html += `<div class="alert alert-warning mt-3"><i class="bi bi-exclamation-triangle me-1"></i> No se cargaron las fechas de campana. Ingresa el periodo para obtener el analisis climatico.</div>`;
         }
 
         // === SATELLITE / HISTORICAL ANALYSIS ===
@@ -620,6 +630,184 @@ const Report = {
         html += '</ul>';
 
         html += '</div>';
+        return html;
+    },
+
+    reclamoSection(results, campaignClimate, climateData) {
+        let html = '<h5 class="mt-4"><i class="bi bi-exclamation-circle me-1"></i> Analisis para Reclamo</h5>';
+        html += '<div class="p-3 bg-light rounded mb-2">';
+
+        html += `<p class="mb-2">Este informe evalua si las condiciones climaticas durante la campana representaron una limitante para el desarrollo del cultivo.</p>`;
+
+        if (results.weightedIP !== null) {
+            html += `<p class="mb-1"><strong>Potencial del suelo (IP):</strong> ${results.weightedIP} — `;
+            if (results.weightedIP >= 65) html += `<span class="text-success">suelo de alta productividad</span>.`;
+            else if (results.weightedIP >= 40) html += `<span class="text-warning">suelo de productividad media</span>.`;
+            else html += `<span class="text-danger">suelo con limitaciones significativas</span>.`;
+            html += `</p>`;
+        }
+
+        if (!campaignClimate) {
+            html += `<p class="text-warning mb-0"><i class="bi bi-calendar-x me-1"></i>Ingresa el periodo de campana para obtener el analisis climatico detallado.</p>`;
+        } else {
+            // Quick preview of climate verdict
+            const wbVerdict = campaignClimate.waterBalance < -200
+                ? { cls: 'danger', txt: 'Deficit hidrico severo' }
+                : campaignClimate.waterBalance < -50
+                    ? { cls: 'warning', txt: 'Deficit hidrico moderado' }
+                    : { cls: 'success', txt: 'Balance hidrico favorable' };
+
+            html += `<p class="mb-1"><strong>Balance hidrico de campana:</strong> `;
+            html += `<span class="text-${wbVerdict.cls}">${wbVerdict.txt} (${campaignClimate.waterBalance > 0 ? '+' : ''}${campaignClimate.waterBalance} mm)</span></p>`;
+
+            if (campaignClimate.frostDays > 0) {
+                html += `<p class="mb-1 text-info"><i class="bi bi-snow me-1"></i><strong>Heladas:</strong> ${campaignClimate.frostDays} dias con T.min < 0°C.</p>`;
+            }
+            if (campaignClimate.hotDays > 0) {
+                html += `<p class="mb-1 text-danger"><i class="bi bi-sun me-1"></i><strong>Calor extremo:</strong> ${campaignClimate.hotDays} dias con T.max > 35°C.</p>`;
+            }
+            if (campaignClimate.heavyRainDays > 0) {
+                html += `<p class="mb-1 text-primary"><i class="bi bi-cloud-rain-heavy me-1"></i><strong>Lluvias intensas:</strong> ${campaignClimate.heavyRainDays} eventos > 40 mm/dia.</p>`;
+            }
+
+            // Compare to historical if available
+            if (climateData) {
+                const pctHist = Math.round(campaignClimate.totalPrecip / climateData.annualPrecip * 100);
+                html += `<hr class="my-2">`;
+                html += `<p class="mb-0 small text-muted">Lluvia de campana: ${campaignClimate.totalPrecip} mm vs. promedio historico anual: ${climateData.annualPrecip} mm (${pctHist}% del promedio).</p>`;
+            }
+        }
+
+        html += '</div>';
+        return html;
+    },
+
+    campaignClimateSection(cc, climateData) {
+        const fmt = d => new Date(d + 'T12:00:00').toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' });
+
+        let html = `<h5 class="mt-4"><i class="bi bi-cloud-sun-rain me-1"></i> Clima de Campana</h5>`;
+        html += `<p class="text-muted small">Periodo: ${fmt(cc.startDate)} al ${fmt(cc.endDate)} &middot; Fuente: Open-Meteo / ERA5</p>`;
+
+        // Summary cards
+        const wbClass = cc.waterBalance >= 0 ? 'text-success' : cc.waterBalance >= -100 ? 'text-warning' : 'text-danger';
+        const wbSign = cc.waterBalance > 0 ? '+' : '';
+        html += '<div class="row g-2 mb-3">';
+        html += this.summaryCard('Lluvia total', `${cc.totalPrecip} mm`, 'bi-cloud-rain');
+        html += this.summaryCard('Balance hidrico', `${wbSign}${cc.waterBalance} mm`, 'bi-droplet-half', wbClass);
+        html += this.summaryCard('T.max prom.', `${cc.avgTempMax}\u00B0C`, 'bi-thermometer-high');
+        html += this.summaryCard('Amplitud term.', `${cc.avgThermalAmplitude}\u00B0C`, 'bi-arrows-expand');
+        html += '</div>';
+
+        // --- Precipitation bar chart ---
+        html += '<div class="mb-1"><strong><i class="bi bi-bar-chart me-1"></i>Precipitaciones mensuales (mm)</strong></div>';
+        const maxPr = Math.max(...cc.months.map(m => m.totalPrecip), 1);
+        html += '<div style="display:flex;align-items:flex-end;gap:2px;height:130px;">';
+        for (const m of cc.months) {
+            const barH = Math.max(2, Math.round((m.totalPrecip / maxPr) * 100));
+            const color = m.totalPrecip > 150 ? '#0077b6' : m.totalPrecip > 80 ? '#0096c7' : m.totalPrecip > 30 ? '#90e0ef' : '#caf0f8';
+            html += `<div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;">
+                <div style="font-size:0.6rem;color:#555;margin-bottom:2px;">${m.totalPrecip}</div>
+                <div style="background:${color};width:70%;height:${barH}px;border-radius:3px 3px 0 0;" title="${m.totalPrecip} mm"></div>
+                <small style="font-size:0.6rem;color:#888;margin-top:2px;">${m.label}</small>
+            </div>`;
+        }
+        html += '</div>';
+
+        // --- Temperature table ---
+        html += '<div class="mt-3 mb-1"><strong><i class="bi bi-thermometer me-1"></i>Temperaturas mensuales (\u00B0C)</strong></div>';
+        html += '<div class="table-responsive"><table class="table table-sm">';
+        html += '<thead><tr><th></th>';
+        for (const m of cc.months) html += `<th class="text-center">${m.label}</th>`;
+        html += '</tr></thead><tbody>';
+
+        html += '<tr><td>T.max</td>';
+        for (const m of cc.months) {
+            const bg = m.tempMax > 35 ? 'table-danger' : m.tempMax > 30 ? 'table-warning' : '';
+            html += `<td class="text-center ${bg}">${m.tempMax}</td>`;
+        }
+        html += '</tr>';
+
+        html += '<tr><td>T.min</td>';
+        for (const m of cc.months) {
+            const bg = m.tempMin < 0 ? 'table-info' : m.tempMin < 5 ? 'table-light' : '';
+            html += `<td class="text-center ${bg}">${m.tempMin}</td>`;
+        }
+        html += '</tr>';
+
+        html += '<tr><td>Amplitud</td>';
+        for (const m of cc.months) {
+            const bg = m.thermalAmplitude > 20 ? 'table-warning' : '';
+            html += `<td class="text-center ${bg}">${m.thermalAmplitude}</td>`;
+        }
+        html += '</tr>';
+        html += '</tbody></table></div>';
+
+        // --- Water balance bidirectional chart ---
+        html += '<div class="mt-3 mb-1"><strong><i class="bi bi-droplet-half me-1"></i>Balance hidrico mensual (Lluvia \u2013 ET\u2080)</strong></div>';
+        html += '<p class="text-muted small mb-1">Azul = superavit &nbsp;|&nbsp; Rojo = deficit</p>';
+
+        const maxAbs = Math.max(...cc.months.map(m => Math.abs(m.waterBalance)), 1);
+        const halfH = 55;
+        html += '<div style="display:flex;gap:2px;">';
+        for (const m of cc.months) {
+            const wb = m.waterBalance;
+            const posH = wb > 0 ? Math.max(2, Math.round((wb / maxAbs) * halfH)) : 0;
+            const negH = wb < 0 ? Math.max(2, Math.round((-wb / maxAbs) * halfH)) : 0;
+            html += `<div style="flex:1;display:flex;flex-direction:column;align-items:center;">
+                <div style="height:${halfH}px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;width:100%;">
+                    ${posH > 0 ? `<div style="background:#0096c7;width:70%;height:${posH}px;border-radius:3px 3px 0 0;" title="+${wb} mm"></div>` : ''}
+                </div>
+                <div style="height:1px;width:100%;background:#aaa;"></div>
+                <div style="height:${halfH}px;display:flex;flex-direction:column;justify-content:flex-start;align-items:center;width:100%;">
+                    ${negH > 0 ? `<div style="background:#ef476f;width:70%;height:${negH}px;border-radius:0 0 3px 3px;" title="${wb} mm"></div>` : ''}
+                </div>
+                <small style="font-size:0.6rem;color:#888;margin-top:2px;">${m.label}</small>
+            </div>`;
+        }
+        html += '</div>';
+
+        // --- Interpretation ---
+        html += '<div class="p-3 bg-light rounded mt-3">';
+        html += '<strong>Interpretacion del clima de campana:</strong>';
+        html += '<ul class="mb-0 mt-2">';
+
+        if (cc.totalPrecip < 200) {
+            html += `<li class="text-danger"><i class="bi bi-exclamation-triangle me-1"></i>Lluvia total muy baja (${cc.totalPrecip} mm): condicion de sequia severa durante la campana.</li>`;
+        } else if (cc.totalPrecip < 400) {
+            html += `<li class="text-warning"><i class="bi bi-exclamation-circle me-1"></i>Lluvia moderada (${cc.totalPrecip} mm): posible estres hidrico en etapas criticas.</li>`;
+        } else {
+            html += `<li class="text-success"><i class="bi bi-check-circle me-1"></i>Precipitacion suficiente durante la campana (${cc.totalPrecip} mm).</li>`;
+        }
+
+        if (cc.waterBalance < -200) {
+            html += `<li class="text-danger"><i class="bi bi-droplet me-1"></i>Deficit hidrico severo: la evapotranspiracion supero ampliamente las lluvias (balance ${cc.waterBalance} mm).</li>`;
+        } else if (cc.waterBalance < -50) {
+            html += `<li class="text-warning"><i class="bi bi-droplet me-1"></i>Deficit hidrico moderado (balance ${cc.waterBalance} mm).</li>`;
+        } else {
+            html += `<li class="text-success"><i class="bi bi-droplet-fill me-1"></i>Balance hidrico positivo (${cc.waterBalance > 0 ? '+' : ''}${cc.waterBalance} mm): no hubo deficit generalizado.</li>`;
+        }
+
+        if (cc.frostDays > 0) {
+            html += `<li class="text-info"><i class="bi bi-snow me-1"></i>${cc.frostDays} dias con heladas (T.min < 0\u00B0C). Riesgo de dano en etapas sensibles del cultivo.</li>`;
+        }
+        if (cc.hotDays > 0) {
+            html += `<li class="text-danger"><i class="bi bi-sun me-1"></i>${cc.hotDays} dias con calor extremo (T.max > 35\u00B0C). Posible impacto en floracion y llenado de grano.</li>`;
+        }
+        if (cc.heavyRainDays > 0) {
+            html += `<li class="text-primary"><i class="bi bi-cloud-rain-heavy me-1"></i>${cc.heavyRainDays} eventos de lluvia intensa (> 40 mm/dia). Riesgo de anegamiento o perdida de suelo.</li>`;
+        }
+        if (cc.frostDays === 0 && cc.hotDays === 0 && cc.heavyRainDays === 0 && cc.waterBalance >= -50) {
+            html += `<li class="text-success"><i class="bi bi-check-circle me-1"></i>No se detectaron eventos climaticos extremos significativos durante la campana.</li>`;
+        }
+
+        // Compare to historical
+        if (climateData) {
+            const pct = Math.round(cc.totalPrecip / climateData.annualPrecip * 100);
+            const histVerdict = pct < 60 ? 'muy por debajo' : pct < 85 ? 'por debajo' : pct > 115 ? 'por encima' : 'dentro';
+            html += `<li class="text-muted"><i class="bi bi-bar-chart me-1"></i>La lluvia de campana representa el ${pct}% del promedio historico anual (${climateData.annualPrecip} mm) — ${histVerdict} de lo normal.</li>`;
+        }
+
+        html += '</ul></div>';
         return html;
     },
 

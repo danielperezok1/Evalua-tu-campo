@@ -99,6 +99,14 @@ const App = {
     setupEventListeners() {
         document.getElementById('analyzeBtn').addEventListener('click', () => this.analyze());
         document.getElementById('exportPdf').addEventListener('click', () => this.exportPDF());
+
+        // Show/hide campaign date section based on report type
+        document.querySelectorAll('input[name="reportType"]').forEach(radio => {
+            radio.addEventListener('change', () => {
+                const section = document.getElementById('campaignDatesSection');
+                section.classList.toggle('d-none', radio.value !== 'reclamo');
+            });
+        });
     },
 
     async handleFileSelect(file) {
@@ -149,6 +157,13 @@ const App = {
             this.updateLoading('Analizando intersecciones espaciales...');
             this.analysisResults = Analysis.analyze(this.fieldGeoJSON, soilData);
 
+            // Read options early (needed for campaign climate fetch)
+            const options = {
+                reportType: document.querySelector('input[name="reportType"]:checked').value,
+                fieldName: document.getElementById('fieldName').value,
+                detailLevel: document.getElementById('detailLevel').value
+            };
+
             // Step 3: Climate data
             this.updateLoading('Consultando datos climaticos...');
             const centroid = turf.centroid(this.fieldGeoJSON);
@@ -164,6 +179,21 @@ const App = {
                 }
             } catch (e) {
                 console.warn('No se pudo obtener clima:', e.message);
+            }
+
+            // Step 3b: Campaign climate for Reclamo type
+            let campaignClimate = null;
+            if (options.reportType === 'reclamo') {
+                const startDate = document.getElementById('campaignStart').value;
+                const endDate = document.getElementById('campaignEnd').value;
+                if (startDate && endDate) {
+                    this.updateLoading('Consultando clima de campana...');
+                    try {
+                        campaignClimate = await Climate.fetchCampaign(lat, lon, startDate, endDate);
+                    } catch (e) {
+                        console.warn('No se pudo obtener clima de campana:', e.message);
+                    }
+                }
             }
 
             // Step 4: Generate thematic maps
@@ -233,13 +263,7 @@ const App = {
 
             // Step 8: Generate report
             this.updateLoading('Generando informe...');
-            const options = {
-                reportType: document.querySelector('input[name="reportType"]:checked').value,
-                fieldName: document.getElementById('fieldName').value,
-                detailLevel: document.getElementById('detailLevel').value
-            };
-
-            const reportHTML = Report.generate(this.analysisResults, options, climateData, mapImages, satelliteData);
+            const reportHTML = Report.generate(this.analysisResults, options, climateData, mapImages, satelliteData, campaignClimate);
 
             // Show results
             document.getElementById('reportContent').innerHTML = reportHTML;
