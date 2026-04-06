@@ -26,15 +26,20 @@ const Report = {
         html += `</div>`;
         html += `</div>`;
 
-        // Summary cards
+        // Detectar si no hay datos de suelo (campo fuera de cobertura IDECOR)
+        const noSoilData = reportType === 'reclamo' && (!results.grouped || results.grouped.length === 0);
+
+        // Summary cards — sin suelo: solo superficie
         html += '<div class="row g-2 mb-3">';
         html += this.summaryCard('Superficie', `${results.totalAreaHa.toFixed(1)} ha`, 'bi-rulers');
-        html += this.summaryCard('IP Promedio', results.weightedIP !== null ? results.weightedIP : 'S/D', 'bi-speedometer2', this.ipClass(results.weightedIP));
-        html += this.summaryCard('Unidades', results.grouped.length, 'bi-layers');
-        html += this.summaryCard('Cobertura', `${results.coveragePercent.toFixed(0)}%`, 'bi-pie-chart');
+        if (!noSoilData) {
+            html += this.summaryCard('IP Promedio', results.weightedIP !== null ? results.weightedIP : 'S/D', 'bi-speedometer2', this.ipClass(results.weightedIP));
+            html += this.summaryCard('Unidades', results.grouped.length, 'bi-layers');
+            html += this.summaryCard('Cobertura', `${results.coveragePercent.toFixed(0)}%`, 'bi-pie-chart');
+        }
         html += '</div>';
 
-        // Climate summary cards (if available)
+        // Climate summary cards
         if (climateData) {
             html += '<div class="row g-2 mb-3">';
             html += this.summaryCard('Lluvia anual', `${climateData.annualPrecip} mm`, 'bi-cloud-rain');
@@ -44,18 +49,16 @@ const Report = {
             html += '</div>';
         }
 
-        // === THEMATIC MAPS ===
-        if (mapImages) {
-            html += this.mapsSection(mapImages);
+        // Mapas temáticos y tabla de suelos: omitir si no hay datos IDECOR
+        if (!noSoilData) {
+            if (mapImages) {
+                html += this.mapsSection(mapImages);
+            }
+            html += '<h5 class="mt-4"><i class="bi bi-table me-1"></i> Unidades de Suelo</h5>';
+            html += this.soilTable(results.grouped, detailLevel);
         }
 
-        // Soil units table
-        html += '<h5 class="mt-4"><i class="bi bi-table me-1"></i> Unidades de Suelo</h5>';
-        html += this.soilTable(results.grouped, detailLevel);
-
-        // Series info is already in the soil units table (Composicion column)
-
-        // Report-type specific sections
+        // Sección específica por tipo de informe
         if (reportType === 'alquiler') {
             html += this.alquilerSection(results);
         } else if (reportType === 'compra') {
@@ -66,24 +69,27 @@ const Report = {
             html += this.reclamoSection(results, campaignClimate, climateData);
         }
 
-        // Climate section (historical — always shown except for reclamo which has its own)
+        // Clima histórico — para reclamo sin suelo se muestra como base de comparación
         if (climateData && reportType !== 'reclamo') {
             html += this.climateSection(climateData, reportType);
         }
+        if (climateData && reportType === 'reclamo' && noSoilData) {
+            html += this.climateSection(climateData, reportType);
+        }
 
-        // Campaign climate section (only for reclamo)
+        // Clima de campaña (solo reclamo)
         if (reportType === 'reclamo' && campaignClimate) {
             html += this.campaignClimateSection(campaignClimate, climateData);
         } else if (reportType === 'reclamo' && !campaignClimate) {
             html += `<div class="alert alert-warning mt-3"><i class="bi bi-exclamation-triangle me-1"></i> No se cargaron las fechas de campana. Ingresa el periodo para obtener el analisis climatico.</div>`;
         }
 
-        // === SATELLITE / HISTORICAL ANALYSIS ===
-        if (satelliteData) {
+        // Análisis satelital/NDVI: omitir si no hay datos de suelo
+        if (satelliteData && !noSoilData) {
             html += this.satelliteSection(satelliteData, climateData);
         }
 
-        // Observations
+        // Observaciones
         html += '<h5 class="mt-4"><i class="bi bi-info-circle me-1"></i> Observaciones</h5>';
         for (const obs of results.observations) {
             const cls = obs.type === 'warning' ? 'warning' : '';
@@ -95,9 +101,10 @@ const Report = {
         html += `
             <div class="alert alert-secondary mt-4 small">
                 <i class="bi bi-shield-check me-1"></i>
-                <strong>Nota:</strong> Suelos: <a href="https://suelos.cba.gov.ar" target="_blank">Cartas de Suelo IDECOR</a> (escala semi-detallada, orientativo).
+                <strong>Nota:</strong>
+                ${!noSoilData ? 'Suelos: <a href="https://suelos.cba.gov.ar" target="_blank">Cartas de Suelo IDECOR</a> (escala semi-detallada, orientativo).' : ''}
                 ${climateData ? 'Clima: <a href="https://open-meteo.com" target="_blank">Open-Meteo</a> (datos historicos).' : ''}
-                ${satelliteData && satelliteData.ndvi ? 'NDVI: MODIS MOD13Q1 (NASA/ORNL DAAC).' : ''}
+                ${satelliteData && satelliteData.ndvi && !noSoilData ? 'NDVI: MODIS MOD13Q1 (NASA/ORNL DAAC).' : ''}
                 No reemplaza un estudio de suelos a campo.
             </div>
         `;
