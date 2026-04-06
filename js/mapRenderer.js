@@ -803,20 +803,32 @@ const MapRenderer = {
         canvas.height = this.CANVAS_HEIGHT;
         const ctx = canvas.getContext('2d');
 
-        ctx.fillStyle = '#f8f9fa';
+        ctx.fillStyle = '#e8ecef';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
         const proj = this.getProjection(bbox, canvas.width, canvas.height, this.PADDING);
         const { colorFn, legend, title } = this.getTheme(type, features);
 
+        // Clip rendering to field boundary so external polygons don't bleed out
+        const fieldGeom = fieldGeoJSON.features[0].geometry;
+        ctx.save();
+        this._clipToField(ctx, fieldGeom, proj);
+
         for (const unit of features) {
             const geom = unit.geometry.geometry || unit.geometry;
             const color = colorFn(unit);
-            this.drawGeometry(ctx, geom, proj, color, '#555', 0.5);
+            this.drawGeometry(ctx, geom, proj, color, 'rgba(80,80,80,0.4)', 0.5);
         }
+        ctx.restore();
 
-        const fieldGeom = fieldGeoJSON.features[0].geometry;
+        // Field border on top (outside clip)
         this.drawGeometry(ctx, fieldGeom, proj, null, '#1b4332', 2.5);
+
+        // Dim area outside field
+        this.drawOutsideMask(ctx, fieldGeom, proj, canvas.width, canvas.height);
+
+        // Re-draw border over mask so it stays sharp
+        this.drawGeometry(ctx, fieldGeom, proj, null, '#1b4332', 2);
 
         ctx.fillStyle = '#1b4332';
         ctx.font = 'bold 16px Arial, sans-serif';
@@ -827,6 +839,22 @@ const MapRenderer = {
         this.drawNorthArrow(ctx, canvas.width - 30, 50);
 
         return canvas.toDataURL('image/png');
+    },
+
+    /** Set a canvas clip path matching the field polygon */
+    _clipToField(ctx, fieldGeom, proj) {
+        const rings = fieldGeom.type === 'Polygon'
+            ? [fieldGeom.coordinates[0]]
+            : fieldGeom.coordinates.map(p => p[0]);
+        ctx.beginPath();
+        for (const ring of rings) {
+            for (let i = 0; i < ring.length; i++) {
+                const [x, y] = proj.project(ring[i][0], ring[i][1]);
+                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.closePath();
+        }
+        ctx.clip();
     },
 
     // === PROJECTION & GEOMETRY ===
