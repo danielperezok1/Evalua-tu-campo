@@ -25,9 +25,10 @@ import math
 SHP = r"C:\Users\daperez\Desktop\Evalua tu campo\1_Mapa_de_Suelos_BA_50000_V1\Suelos_BA_50mil_V1.shp"
 OUT_DIR = r"C:\Users\daperez\Desktop\Evalua tu campo\data\sheets-ba"
 INDEX_PATH = r"C:\Users\daperez\Desktop\Evalua tu campo\data\sheets-ba-index.json"
-# Tolerance in degrees (~500m at this latitude)
-SIMPLIFY_TOL = 0.005
-# Coordinate decimal places (4 = ~11m precision)
+# Tolerancia baja para preservar curvas organicas del shapefile 1:50000
+# 0.001 deg ~ 110m: elimina solo vertices redundantes, mantiene la forma
+SIMPLIFY_TOL = 0.001
+# Precision de coordenadas: 4 decimales = ~11m (suficiente para 1:50000)
 COORD_PRECISION = 4
 
 
@@ -60,9 +61,12 @@ if gdf.crs and gdf.crs.to_epsg() != 4326:
     print("  Reproyectando a WGS84...")
     gdf = gdf.to_crs(epsg=4326)
 
-# Simplify geometry
-print(f"  Simplificando geometria (tolerancia={SIMPLIFY_TOL} deg)...")
-gdf['geometry'] = gdf['geometry'].simplify(SIMPLIFY_TOL, preserve_topology=True)
+# Simplify geometry (omitir si SIMPLIFY_TOL=0)
+if SIMPLIFY_TOL > 0:
+    print(f"  Simplificando geometria (tolerancia={SIMPLIFY_TOL} deg)...")
+    gdf['geometry'] = gdf['geometry'].simplify(SIMPLIFY_TOL, preserve_topology=True)
+else:
+    print("  Sin simplificacion: se conservan curvas originales del shapefile.")
 
 # Map BA columns to IDECOR format
 def get_val(row, col):
