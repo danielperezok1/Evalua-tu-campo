@@ -21,8 +21,9 @@ const Report = {
         html += `<h5 class="mb-1"><i class="bi bi-file-earmark-text me-1"></i> ${fieldName || 'Campo sin nombre'}</h5>`;
         html += `<p class="text-muted mb-0">Informe para <strong>${typeLabels[reportType]}</strong> &middot; ${new Date().toLocaleDateString('es-AR')}</p>`;
         html += `</div>`;
-        html += `<div class="text-end small text-muted">`;
-        html += `<div>Evalua tu Campo</div>`;
+        html += `<div class="text-end small text-muted d-flex align-items-center justify-content-end gap-2">`;
+        html += `<img src="Experta.png" alt="Experta" style="height:24px;object-fit:contain;">`;
+        html += `<div style="font-weight:600;">Evalua tu Campo</div>`;
         html += `</div>`;
         html += `</div>`;
 
@@ -53,8 +54,8 @@ const Report = {
 
         // Mapas temáticos y tabla de suelos: omitir si no hay datos de suelo
         if (!noSoilData) {
-            if (mapImages && !isBASoil) {
-                html += this.mapsSection(mapImages);
+            if (mapImages) {
+                html += this.mapsSection(mapImages, isBASoil);
             }
             html += '<h5 class="mt-4"><i class="bi bi-table me-1"></i> Unidades de Suelo</h5>';
             if (isBASoil) {
@@ -133,7 +134,7 @@ const Report = {
     },
 
     // === MAPS SECTION ===
-    mapsSection(mapImages) {
+    mapsSection(mapImages, isBASoil) {
         let html = '<h5 class="mt-4"><i class="bi bi-map me-1"></i> Mapas Tematicos</h5>';
 
         // Satellite RGB comparison (wet vs dry year) - side by side
@@ -182,7 +183,8 @@ const Report = {
 
         html += '<div class="row g-3 mb-3">';
 
-        if (mapImages.ipMap) {
+        // Mapa IP: solo para IDECOR (BA no tiene IP)
+        if (mapImages.ipMap && !isBASoil) {
             html += '<div class="col-12">';
             html += `<div class="border rounded overflow-hidden">`;
             html += `<img src="${mapImages.ipMap}" class="w-100" alt="Mapa de IP" style="max-height:400px;object-fit:contain;background:#f8f9fa;">`;
@@ -190,16 +192,20 @@ const Report = {
             html += '</div>';
         }
 
+        // Mapa Clase de Uso: disponible para IDECOR y BA
         if (mapImages.classMap) {
-            html += '<div class="col-md-6">';
+            const colClass = (mapImages.seriesMap) ? 'col-md-6' : 'col-12';
+            html += `<div class="${colClass}">`;
             html += `<div class="border rounded overflow-hidden">`;
             html += `<img src="${mapImages.classMap}" class="w-100" alt="Mapa de Clase de Uso" style="max-height:350px;object-fit:contain;background:#f8f9fa;">`;
             html += `</div>`;
             html += '</div>';
         }
 
+        // Mapa Series: disponible para IDECOR y BA
         if (mapImages.seriesMap) {
-            html += '<div class="col-md-6">';
+            const colClass = (mapImages.classMap) ? 'col-md-6' : 'col-12';
+            html += `<div class="${colClass}">`;
             html += `<div class="border rounded overflow-hidden">`;
             html += `<img src="${mapImages.seriesMap}" class="w-100" alt="Mapa de Series" style="max-height:350px;object-fit:contain;background:#f8f9fa;">`;
             html += `</div>`;
