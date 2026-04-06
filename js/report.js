@@ -22,7 +22,7 @@ const Report = {
         html += `<p class="text-muted mb-0">Informe para <strong>${typeLabels[reportType]}</strong> &middot; ${new Date().toLocaleDateString('es-AR')}</p>`;
         html += `</div>`;
         html += `<div class="text-end small text-muted">`;
-        html += `<div><i class="bi bi-twitter-x"></i> <a href="https://x.com/daniel_pperez" target="_blank">@daniel_pperez</a></div>`;
+        html += `<div>Evalua tu Campo</div>`;
         html += `</div>`;
         html += `</div>`;
 
@@ -105,10 +105,7 @@ const Report = {
         // Author footer
         html += `
             <div class="text-center mt-3 pt-3 border-top">
-                <small class="text-muted">
-                    <strong>Evalua tu Campo</strong> &middot;
-                    <i class="bi bi-twitter-x"></i> <a href="https://x.com/daniel_pperez" target="_blank">@daniel_pperez</a>
-                </small>
+                <small class="text-muted"><strong>Evalua tu Campo</strong></small>
             </div>
         `;
 
@@ -650,16 +647,6 @@ const Report = {
         if (!campaignClimate) {
             html += `<p class="text-warning mb-0"><i class="bi bi-calendar-x me-1"></i>Ingresa el periodo de campana para obtener el analisis climatico detallado.</p>`;
         } else {
-            // Quick preview of climate verdict
-            const wbVerdict = campaignClimate.waterBalance < -200
-                ? { cls: 'danger', txt: 'Deficit hidrico severo' }
-                : campaignClimate.waterBalance < -50
-                    ? { cls: 'warning', txt: 'Deficit hidrico moderado' }
-                    : { cls: 'success', txt: 'Balance hidrico favorable' };
-
-            html += `<p class="mb-1"><strong>Balance hidrico de campana:</strong> `;
-            html += `<span class="text-${wbVerdict.cls}">${wbVerdict.txt} (${campaignClimate.waterBalance > 0 ? '+' : ''}${campaignClimate.waterBalance} mm)</span></p>`;
-
             if (campaignClimate.frostDays > 0) {
                 html += `<p class="mb-1 text-info"><i class="bi bi-snow me-1"></i><strong>Heladas:</strong> ${campaignClimate.frostDays} dias con T.min < 0°C.</p>`;
             }
@@ -688,123 +675,33 @@ const Report = {
         let html = `<h5 class="mt-4"><i class="bi bi-cloud-sun-rain me-1"></i> Clima de Campana</h5>`;
         html += `<p class="text-muted small">Periodo: ${fmt(cc.startDate)} al ${fmt(cc.endDate)} &middot; Fuente: Open-Meteo / ERA5</p>`;
 
-        // Summary cards
-        const wbClass = cc.waterBalance >= 0 ? 'text-success' : cc.waterBalance >= -100 ? 'text-warning' : 'text-danger';
-        const wbSign = cc.waterBalance > 0 ? '+' : '';
+        // Summary cards (sin balance hidrico)
         html += '<div class="row g-2 mb-3">';
         html += this.summaryCard('Lluvia total', `${cc.totalPrecip} mm`, 'bi-cloud-rain');
-        html += this.summaryCard('Balance hidrico', `${wbSign}${cc.waterBalance} mm`, 'bi-droplet-half', wbClass);
         html += this.summaryCard('T.max prom.', `${cc.avgTempMax}\u00B0C`, 'bi-thermometer-high');
+        html += this.summaryCard('T.min prom.', `${cc.avgTempMin}\u00B0C`, 'bi-thermometer-low');
         html += this.summaryCard('Amplitud term.', `${cc.avgThermalAmplitude}\u00B0C`, 'bi-arrows-expand');
         html += '</div>';
 
-        // --- Precipitation bar chart (simple campaign) ---
-        html += '<div class="mb-1"><strong><i class="bi bi-bar-chart me-1"></i>Precipitaciones mensuales de campana (mm)</strong></div>';
-        const maxPr = Math.max(...cc.months.map(m => m.totalPrecip), 1);
-        html += '<div style="display:flex;align-items:flex-end;gap:2px;height:120px;">';
-        for (const m of cc.months) {
-            const barH = Math.max(2, Math.round((m.totalPrecip / maxPr) * 90));
-            const color = m.totalPrecip > 150 ? '#0077b6' : m.totalPrecip > 80 ? '#0096c7' : m.totalPrecip > 30 ? '#90e0ef' : '#caf0f8';
-            html += `<div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;">
-                <div style="font-size:0.6rem;color:#555;margin-bottom:2px;">${m.totalPrecip}</div>
-                <div style="background:${color};width:70%;height:${barH}px;border-radius:3px 3px 0 0;" title="${m.totalPrecip} mm"></div>
-                <small style="font-size:0.6rem;color:#888;margin-top:2px;">${m.label}</small>
-            </div>`;
-        }
-        html += '</div>';
-
-        // --- Comparison chart: historical avg vs campaign ---
-        if (climateData && climateData.monthlyData) {
-            html += '<div class="mt-3 mb-1"><strong><i class="bi bi-bar-chart-line me-1"></i>Lluvia: promedio historico vs campana</strong></div>';
-            html += '<p class="text-muted small mb-1">Gris = promedio historico &nbsp;&middot;&nbsp; Color = campana actual</p>';
-
-            const allVals = cc.months.flatMap(m => {
-                const mi = parseInt(m.key.split('-')[1]) - 1;
-                return [m.totalPrecip, Math.round(climateData.monthlyData[mi]?.precip || 0)];
-            });
-            const maxComp = Math.max(...allVals, 1);
-            const compBarMax = 90;
-
-            html += '<div style="display:flex;gap:3px;align-items:flex-end;height:120px;">';
-            for (const m of cc.months) {
-                const mi = parseInt(m.key.split('-')[1]) - 1;
-                const histPr = Math.round(climateData.monthlyData[mi]?.precip || 0);
-                const campPr = m.totalPrecip;
-                const histH = Math.max(2, Math.round((histPr / maxComp) * compBarMax));
-                const campH = Math.max(2, Math.round((campPr / maxComp) * compBarMax));
-                // Color campaign bar: red if <70% of hist, green if within range, blue if >130%
-                const campColor = campPr < histPr * 0.7 ? '#ef476f' : campPr > histPr * 1.3 ? '#0096c7' : '#52b788';
-                html += `<div style="flex:1;display:flex;flex-direction:column;align-items:center;">
-                    <div style="display:flex;gap:1px;align-items:flex-end;height:${compBarMax}px;">
-                        <div style="background:#adb5bd;width:45%;height:${histH}px;border-radius:2px 2px 0 0;" title="Hist: ${histPr} mm"></div>
-                        <div style="background:${campColor};width:45%;height:${campH}px;border-radius:2px 2px 0 0;" title="Campaña: ${campPr} mm"></div>
-                    </div>
-                    <small style="font-size:0.6rem;color:#888;margin-top:2px;">${m.label}</small>
-                </div>`;
-            }
-            html += '</div>';
-            html += '<div style="display:flex;gap:12px;margin-top:4px;" class="small text-muted">';
-            html += '<span><span style="display:inline-block;width:12px;height:10px;background:#adb5bd;border-radius:2px;vertical-align:middle;"></span> Historico</span>';
-            html += '<span><span style="display:inline-block;width:12px;height:10px;background:#52b788;border-radius:2px;vertical-align:middle;"></span> Campana (normal)</span>';
-            html += '<span><span style="display:inline-block;width:12px;height:10px;background:#ef476f;border-radius:2px;vertical-align:middle;"></span> Campana (deficit)</span>';
-            html += '<span><span style="display:inline-block;width:12px;height:10px;background:#0096c7;border-radius:2px;vertical-align:middle;"></span> Campana (exceso)</span>';
-            html += '</div>';
+        // --- Grafico precipitaciones: barras campana + linea historico (canvas) ---
+        html += '<div class="mb-1"><strong><i class="bi bi-bar-chart me-1"></i>Precipitaciones mensuales (mm)</strong></div>';
+        try {
+            const precipUrl = this.renderCampaignPrecipChart(cc, climateData);
+            html += `<img src="${precipUrl}" class="w-100" style="max-height:230px;object-fit:contain;" alt="Grafico precipitaciones">`;
+        } catch(e) {
+            html += '<p class="text-muted small">No se pudo generar el grafico.</p>';
         }
 
-        // --- Temperature table ---
+        // --- Grafico temperaturas: barras rango campana + lineas historico (canvas) ---
         html += '<div class="mt-3 mb-1"><strong><i class="bi bi-thermometer me-1"></i>Temperaturas mensuales (\u00B0C)</strong></div>';
-        html += '<div class="table-responsive"><table class="table table-sm">';
-        html += '<thead><tr><th></th>';
-        for (const m of cc.months) html += `<th class="text-center">${m.label}</th>`;
-        html += '</tr></thead><tbody>';
-
-        html += '<tr><td>T.max</td>';
-        for (const m of cc.months) {
-            const bg = m.tempMax > 35 ? 'table-danger' : m.tempMax > 30 ? 'table-warning' : '';
-            html += `<td class="text-center ${bg}">${m.tempMax}</td>`;
+        try {
+            const tempUrl = this.renderCampaignTempChart(cc, climateData);
+            html += `<img src="${tempUrl}" class="w-100" style="max-height:230px;object-fit:contain;" alt="Grafico temperaturas">`;
+        } catch(e) {
+            html += '<p class="text-muted small">No se pudo generar el grafico.</p>';
         }
-        html += '</tr>';
 
-        html += '<tr><td>T.min</td>';
-        for (const m of cc.months) {
-            const bg = m.tempMin < 0 ? 'table-info' : m.tempMin < 5 ? 'table-light' : '';
-            html += `<td class="text-center ${bg}">${m.tempMin}</td>`;
-        }
-        html += '</tr>';
-
-        html += '<tr><td>Amplitud</td>';
-        for (const m of cc.months) {
-            const bg = m.thermalAmplitude > 20 ? 'table-warning' : '';
-            html += `<td class="text-center ${bg}">${m.thermalAmplitude}</td>`;
-        }
-        html += '</tr>';
-        html += '</tbody></table></div>';
-
-        // --- Water balance bidirectional chart ---
-        html += '<div class="mt-3 mb-1"><strong><i class="bi bi-droplet-half me-1"></i>Balance hidrico mensual (Lluvia \u2013 ET\u2080)</strong></div>';
-        html += '<p class="text-muted small mb-1">Azul = superavit &nbsp;|&nbsp; Rojo = deficit</p>';
-
-        const maxAbs = Math.max(...cc.months.map(m => Math.abs(m.waterBalance)), 1);
-        const halfH = 55;
-        html += '<div style="display:flex;gap:2px;">';
-        for (const m of cc.months) {
-            const wb = m.waterBalance;
-            const posH = wb > 0 ? Math.max(2, Math.round((wb / maxAbs) * halfH)) : 0;
-            const negH = wb < 0 ? Math.max(2, Math.round((-wb / maxAbs) * halfH)) : 0;
-            html += `<div style="flex:1;display:flex;flex-direction:column;align-items:center;">
-                <div style="height:${halfH}px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;width:100%;">
-                    ${posH > 0 ? `<div style="background:#0096c7;width:70%;height:${posH}px;border-radius:3px 3px 0 0;" title="+${wb} mm"></div>` : ''}
-                </div>
-                <div style="height:1px;width:100%;background:#aaa;"></div>
-                <div style="height:${halfH}px;display:flex;flex-direction:column;justify-content:flex-start;align-items:center;width:100%;">
-                    ${negH > 0 ? `<div style="background:#ef476f;width:70%;height:${negH}px;border-radius:0 0 3px 3px;" title="${wb} mm"></div>` : ''}
-                </div>
-                <small style="font-size:0.6rem;color:#888;margin-top:2px;">${m.label}</small>
-            </div>`;
-        }
-        html += '</div>';
-
-        // --- Interpretation ---
+        // --- Interpretacion ---
         html += '<div class="p-3 bg-light rounded mt-3">';
         html += '<strong>Interpretacion del clima de campana:</strong>';
         html += '<ul class="mb-0 mt-2">';
@@ -817,14 +714,6 @@ const Report = {
             html += `<li class="text-success"><i class="bi bi-check-circle me-1"></i>Precipitacion suficiente durante la campana (${cc.totalPrecip} mm).</li>`;
         }
 
-        if (cc.waterBalance < -200) {
-            html += `<li class="text-danger"><i class="bi bi-droplet me-1"></i>Deficit hidrico severo: la evapotranspiracion supero ampliamente las lluvias (balance ${cc.waterBalance} mm).</li>`;
-        } else if (cc.waterBalance < -50) {
-            html += `<li class="text-warning"><i class="bi bi-droplet me-1"></i>Deficit hidrico moderado (balance ${cc.waterBalance} mm).</li>`;
-        } else {
-            html += `<li class="text-success"><i class="bi bi-droplet-fill me-1"></i>Balance hidrico positivo (${cc.waterBalance > 0 ? '+' : ''}${cc.waterBalance} mm): no hubo deficit generalizado.</li>`;
-        }
-
         if (cc.frostDays > 0) {
             html += `<li class="text-info"><i class="bi bi-snow me-1"></i>${cc.frostDays} dias con heladas (T.min < 0\u00B0C). Riesgo de dano en etapas sensibles del cultivo.</li>`;
         }
@@ -834,11 +723,10 @@ const Report = {
         if (cc.heavyRainDays > 0) {
             html += `<li class="text-primary"><i class="bi bi-cloud-rain-heavy me-1"></i>${cc.heavyRainDays} eventos de lluvia intensa (> 40 mm/dia). Riesgo de anegamiento o perdida de suelo.</li>`;
         }
-        if (cc.frostDays === 0 && cc.hotDays === 0 && cc.heavyRainDays === 0 && cc.waterBalance >= -50) {
+        if (cc.frostDays === 0 && cc.hotDays === 0 && cc.heavyRainDays === 0) {
             html += `<li class="text-success"><i class="bi bi-check-circle me-1"></i>No se detectaron eventos climaticos extremos significativos durante la campana.</li>`;
         }
 
-        // Compare to historical
         if (climateData) {
             const pct = Math.round(cc.totalPrecip / climateData.annualPrecip * 100);
             const histVerdict = pct < 60 ? 'muy por debajo' : pct < 85 ? 'por debajo' : pct > 115 ? 'por encima' : 'dentro';
@@ -846,7 +734,215 @@ const Report = {
         }
 
         html += '</ul></div>';
+
+        // --- Recurso externo: humedad de suelo ---
+        html += `
+        <div class="alert alert-info mt-3 small">
+            <i class="bi bi-droplet-fill me-1"></i>
+            <strong>Humedad de suelo:</strong> Para consultar la evolucion de agua en suelo durante la campana,
+            ingresar en <a href="https://sepa.inta.gob.ar/productos/geosepa/agua_en_suelo/pj/" target="_blank">SEPA INTA - Agua en Suelo</a>
+            o en el visor
+            <a href="https://patooricchio.users.earthengine.app/view/pj-10d" target="_blank">GEE % Agua en Suelo</a>
+            y ubicar el punto correspondiente al campo.
+        </div>`;
+
         return html;
+    },
+
+    // --- Canvas chart: Precipitaciones campana (barras) + historico (linea punteada) ---
+    renderCampaignPrecipChart(cc, climateData) {
+        const W = 680, H = 210;
+        const canvas = document.createElement('canvas');
+        canvas.width = W; canvas.height = H;
+        const ctx = canvas.getContext('2d');
+
+        const ML = 42, MR = 12, MT = 22, MB = 48;
+        const cW = W - ML - MR, cH = H - MT - MB;
+        const months = cc.months, n = months.length;
+        const barW = cW / n;
+
+        const histData = months.map(m => {
+            const mi = parseInt(m.key.split('-')[1]) - 1;
+            return Math.round(climateData?.monthlyData?.[mi]?.precip || 0);
+        });
+        const campData = months.map(m => m.totalPrecip);
+        const maxVal = Math.max(...histData, ...campData, 10);
+        const toY = v => MT + cH - (v / maxVal) * cH;
+        const cx = i => ML + i * barW + barW / 2;
+
+        // Fondo blanco
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, W, H);
+
+        // Grilla y etiquetas eje Y
+        ctx.strokeStyle = '#ebebeb'; ctx.lineWidth = 1;
+        for (let i = 0; i <= 4; i++) {
+            const y = MT + (cH / 4) * i;
+            ctx.beginPath(); ctx.moveTo(ML, y); ctx.lineTo(ML + cW, y); ctx.stroke();
+            ctx.fillStyle = '#aaa'; ctx.font = '10px Arial'; ctx.textAlign = 'right';
+            ctx.fillText(Math.round(maxVal * (1 - i / 4)), ML - 4, y + 4);
+        }
+
+        // Barras campana
+        for (let i = 0; i < n; i++) {
+            const camp = campData[i], hist = histData[i];
+            const x = ML + i * barW + barW * 0.12;
+            const bw = barW * 0.76;
+            const bh = (camp / maxVal) * cH;
+            const y = MT + cH - bh;
+            ctx.fillStyle = camp < hist * 0.7 ? '#ef476f' : camp > hist * 1.3 ? '#0096c7' : '#52b788';
+            ctx.fillRect(x, y, bw, bh);
+            ctx.fillStyle = bh > 14 ? '#fff' : '#333';
+            ctx.font = bh > 14 ? 'bold 10px Arial' : '10px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(camp, x + bw / 2, bh > 14 ? y + 12 : y - 3);
+        }
+
+        // Linea punteada: promedio historico
+        if (climateData?.monthlyData) {
+            ctx.strokeStyle = '#555'; ctx.lineWidth = 2.5; ctx.setLineDash([5, 4]);
+            ctx.beginPath();
+            for (let i = 0; i < n; i++) {
+                i === 0 ? ctx.moveTo(cx(i), toY(histData[i])) : ctx.lineTo(cx(i), toY(histData[i]));
+            }
+            ctx.stroke(); ctx.setLineDash([]);
+            // Puntos y valores sobre la linea
+            for (let i = 0; i < n; i++) {
+                ctx.fillStyle = '#444';
+                ctx.beginPath(); ctx.arc(cx(i), toY(histData[i]), 3.5, 0, Math.PI * 2); ctx.fill();
+                ctx.font = '9px Arial'; ctx.textAlign = 'center';
+                ctx.fillText(histData[i], cx(i), toY(histData[i]) - 7);
+            }
+        }
+
+        // Etiquetas eje X
+        ctx.fillStyle = '#555'; ctx.font = '10px Arial'; ctx.textAlign = 'center';
+        for (let i = 0; i < n; i++) ctx.fillText(months[i].label, cx(i), MT + cH + 16);
+
+        // Eje Y label
+        ctx.save(); ctx.translate(11, MT + cH / 2); ctx.rotate(-Math.PI / 2);
+        ctx.fillStyle = '#888'; ctx.font = '10px Arial'; ctx.textAlign = 'center';
+        ctx.fillText('mm', 0, 0); ctx.restore();
+
+        // Leyenda
+        const lY = H - 13;
+        ctx.fillStyle = '#52b788'; ctx.fillRect(ML, lY - 9, 13, 10);
+        ctx.fillStyle = '#555'; ctx.font = '10px Arial'; ctx.textAlign = 'left';
+        ctx.fillText('Campana', ML + 16, lY);
+        if (climateData?.monthlyData) {
+            ctx.strokeStyle = '#555'; ctx.lineWidth = 2.5; ctx.setLineDash([5, 4]);
+            ctx.beginPath(); ctx.moveTo(ML + 80, lY - 4); ctx.lineTo(ML + 94, lY - 4); ctx.stroke();
+            ctx.setLineDash([]); ctx.fillText('Historico prom.', ML + 98, lY);
+        }
+        ctx.fillStyle = '#ef476f'; ctx.fillRect(ML + 195, lY - 9, 13, 10);
+        ctx.fillStyle = '#555'; ctx.fillText('Deficit', ML + 211, lY);
+        ctx.fillStyle = '#0096c7'; ctx.fillRect(ML + 255, lY - 9, 13, 10);
+        ctx.fillText('Exceso', ML + 271, lY);
+
+        return canvas.toDataURL('image/png');
+    },
+
+    // --- Canvas chart: Temperaturas campana (rango barras) + historico (lineas punteadas) ---
+    renderCampaignTempChart(cc, climateData) {
+        const W = 680, H = 210;
+        const canvas = document.createElement('canvas');
+        canvas.width = W; canvas.height = H;
+        const ctx = canvas.getContext('2d');
+
+        const ML = 42, MR = 12, MT = 22, MB = 48;
+        const cW = W - ML - MR, cH = H - MT - MB;
+        const months = cc.months, n = months.length;
+        const barW = cW / n;
+
+        const histMaxData = months.map(m => climateData?.monthlyData?.[parseInt(m.key.split('-')[1]) - 1]?.tempMax ?? null);
+        const histMinData = months.map(m => climateData?.monthlyData?.[parseInt(m.key.split('-')[1]) - 1]?.tempMin ?? null);
+
+        const allT = [...months.map(m => m.tempMax), ...months.map(m => m.tempMin),
+                      ...histMaxData.filter(v => v !== null), ...histMinData.filter(v => v !== null)];
+        const minT = Math.floor(Math.min(...allT)) - 2;
+        const maxT = Math.ceil(Math.max(...allT)) + 2;
+        const range = maxT - minT;
+        const toY = v => MT + cH - ((v - minT) / range) * cH;
+        const cx = i => ML + i * barW + barW / 2;
+
+        // Fondo blanco
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+
+        // Grilla y eje Y
+        ctx.strokeStyle = '#ebebeb'; ctx.lineWidth = 1;
+        for (let i = 0; i <= 4; i++) {
+            const y = MT + (cH / 4) * i;
+            ctx.beginPath(); ctx.moveTo(ML, y); ctx.lineTo(ML + cW, y); ctx.stroke();
+            ctx.fillStyle = '#aaa'; ctx.font = '10px Arial'; ctx.textAlign = 'right';
+            ctx.fillText(Math.round(maxT - (range / 4) * i) + '\u00B0', ML - 4, y + 4);
+        }
+
+        // Barras rango campana (Tmin → Tmax)
+        for (let i = 0; i < n; i++) {
+            const yMax = toY(months[i].tempMax);
+            const yMin = toY(months[i].tempMin);
+            const x = ML + i * barW + barW * 0.22;
+            const bw = barW * 0.56;
+            ctx.fillStyle = 'rgba(82,183,136,0.45)';
+            ctx.fillRect(x, yMax, bw, yMin - yMax);
+            ctx.strokeStyle = '#2d6a4f'; ctx.lineWidth = 1; ctx.setLineDash([]);
+            ctx.strokeRect(x, yMax, bw, yMin - yMax);
+            // Valores T.max (rojo) y T.min (azul)
+            ctx.fillStyle = '#c1121f'; ctx.font = 'bold 9px Arial'; ctx.textAlign = 'center';
+            ctx.fillText(months[i].tempMax, cx(i), yMax - 4);
+            ctx.fillStyle = '#023e8a';
+            ctx.fillText(months[i].tempMin, cx(i), yMin + 11);
+        }
+
+        // Linea historica T.max
+        if (histMaxData.some(v => v !== null)) {
+            ctx.strokeStyle = '#c1121f'; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+            ctx.beginPath();
+            for (let i = 0; i < n; i++) {
+                if (histMaxData[i] === null) continue;
+                (i === 0 || histMaxData[i - 1] === null) ? ctx.moveTo(cx(i), toY(histMaxData[i])) : ctx.lineTo(cx(i), toY(histMaxData[i]));
+            }
+            ctx.stroke();
+        }
+        // Linea historica T.min
+        if (histMinData.some(v => v !== null)) {
+            ctx.strokeStyle = '#023e8a'; ctx.lineWidth = 2;
+            ctx.beginPath();
+            for (let i = 0; i < n; i++) {
+                if (histMinData[i] === null) continue;
+                (i === 0 || histMinData[i - 1] === null) ? ctx.moveTo(cx(i), toY(histMinData[i])) : ctx.lineTo(cx(i), toY(histMinData[i]));
+            }
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        // Eje X
+        ctx.fillStyle = '#555'; ctx.font = '10px Arial'; ctx.textAlign = 'center';
+        for (let i = 0; i < n; i++) ctx.fillText(months[i].label, cx(i), MT + cH + 16);
+
+        // Eje Y label
+        ctx.save(); ctx.translate(11, MT + cH / 2); ctx.rotate(-Math.PI / 2);
+        ctx.fillStyle = '#888'; ctx.font = '10px Arial'; ctx.textAlign = 'center';
+        ctx.fillText('\u00B0C', 0, 0); ctx.restore();
+
+        // Leyenda
+        const lY = H - 13;
+        ctx.fillStyle = 'rgba(82,183,136,0.45)'; ctx.fillRect(ML, lY - 9, 13, 10);
+        ctx.strokeStyle = '#2d6a4f'; ctx.lineWidth = 1; ctx.setLineDash([]);
+        ctx.strokeRect(ML, lY - 9, 13, 10);
+        ctx.fillStyle = '#555'; ctx.font = '10px Arial'; ctx.textAlign = 'left';
+        ctx.fillText('Rango campaña', ML + 16, lY);
+        if (histMaxData.some(v => v !== null)) {
+            ctx.strokeStyle = '#c1121f'; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+            ctx.beginPath(); ctx.moveTo(ML + 115, lY - 4); ctx.lineTo(ML + 129, lY - 4); ctx.stroke();
+            ctx.fillStyle = '#c1121f'; ctx.fillText('T.max hist.', ML + 133, lY);
+            ctx.strokeStyle = '#023e8a';
+            ctx.beginPath(); ctx.moveTo(ML + 197, lY - 4); ctx.lineTo(ML + 211, lY - 4); ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.fillStyle = '#023e8a'; ctx.fillText('T.min hist.', ML + 215, lY);
+        }
+
+        return canvas.toDataURL('image/png');
     },
 
     landUseRecommendation(cu) {
