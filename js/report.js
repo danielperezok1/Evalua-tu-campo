@@ -21,9 +21,8 @@ const Report = {
         html += `<h5 class="mb-1"><i class="bi bi-file-earmark-text me-1"></i> ${fieldName || 'Campo sin nombre'}</h5>`;
         html += `<p class="text-muted mb-0">Informe para <strong>${typeLabels[reportType]}</strong> &middot; ${new Date().toLocaleDateString('es-AR')}</p>`;
         html += `</div>`;
-        html += `<div class="text-end small text-muted d-flex align-items-center justify-content-end gap-2">`;
-        html += `<img src="Experta.png" alt="Experta" style="height:24px;object-fit:contain;">`;
-        html += `<div style="font-weight:600;">Evalua tu Campo</div>`;
+        html += `<div class="text-end d-flex align-items-center justify-content-end">`;
+        html += `<img src="Experta.png" alt="Experta" style="height:38px;object-fit:contain;">`;
         html += `</div>`;
         html += `</div>`;
 
@@ -55,7 +54,7 @@ const Report = {
         // Mapas temáticos y tabla de suelos: omitir si no hay datos de suelo
         if (!noSoilData) {
             if (mapImages) {
-                html += this.mapsSection(mapImages, isBASoil);
+                html += this.mapsSection(mapImages, isBASoil, reportType);
             }
             html += '<h5 class="mt-4"><i class="bi bi-table me-1"></i> Unidades de Suelo</h5>';
             if (isBASoil) {
@@ -126,7 +125,7 @@ const Report = {
         // Author footer
         html += `
             <div class="text-center mt-3 pt-3 border-top">
-                <small class="text-muted"><strong>Evalua tu Campo</strong></small>
+                <img src="Experta.png" alt="Experta" style="height:28px;object-fit:contain;opacity:0.7;">
             </div>
         `;
 
@@ -134,11 +133,12 @@ const Report = {
     },
 
     // === MAPS SECTION ===
-    mapsSection(mapImages, isBASoil) {
+    mapsSection(mapImages, isBASoil, reportType) {
         let html = '<h5 class="mt-4"><i class="bi bi-map me-1"></i> Mapas Tematicos</h5>';
+        const isReclamo = reportType === 'reclamo';
 
-        // Satellite RGB comparison (wet vs dry year) - side by side
-        if (mapImages.wetImage || mapImages.dryImage) {
+        // Satellite RGB comparison (wet vs dry year) - side by side — NO para Reclamo
+        if (!isReclamo && (mapImages.wetImage || mapImages.dryImage)) {
             const wetLabel = mapImages.wettestYear ? `Ano lluvioso: ${mapImages.wettestYear} (${mapImages.wettestPrecip} mm)` : 'Ano lluvioso';
             const dryLabel = mapImages.driestYear ? `Ano seco: ${mapImages.driestYear} (${mapImages.driestPrecip} mm)` : 'Ano seco';
             html += `<p class="small text-muted mb-2"><i class="bi bi-info-circle me-1"></i>Imagenes satelitales comparativas. En el periodo critico (verano), las zonas con agua visible indican bajos anegables.</p>`;
@@ -162,8 +162,8 @@ const Report = {
             html += '</div>';
         }
 
-        // NDVI greenness map (spatial)
-        if (mapImages.ndviMap) {
+        // NDVI greenness map (spatial) — NO para Reclamo
+        if (!isReclamo && mapImages.ndviMap) {
             html += '<div class="mb-3">';
             html += `<div class="border rounded overflow-hidden shadow-sm">`;
             html += `<img src="${mapImages.ndviMap}" class="w-100" alt="Mapa NDVI" style="object-fit:contain;">`;
@@ -172,8 +172,8 @@ const Report = {
             html += '</div>';
         }
 
-        // NDVI/productivity chart (temporal)
-        if (mapImages.ndviChart) {
+        // NDVI/productivity chart (temporal) — NO para Reclamo
+        if (!isReclamo && mapImages.ndviChart) {
             html += '<div class="mb-3">';
             html += `<div class="border rounded overflow-hidden shadow-sm">`;
             html += `<img src="${mapImages.ndviChart}" class="w-100" alt="Productividad Historica" style="object-fit:contain;background:#fafafa;">`;
